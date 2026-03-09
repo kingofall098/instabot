@@ -24,37 +24,31 @@ def extract_username(text):
         return match.group(1)
 
     return text
-def fetch_profile_html(username):
+def fetch_profile(username):
 
     import random
     time.sleep(random.uniform(2,4))
 
-    url = f"https://www.instagram.com/{username}/"
+    url = "https://i.instagram.com/api/v1/users/web_profile_info/"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.instagram.com/"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "X-IG-App-ID": "936619743392459"
     }
 
-    r = requests.get(url, headers=headers)
+    params = {
+        "username": username
+    }
+
+    r = requests.get(url, headers=headers, params=params)
+
+    print("Status:", r.status_code)
 
     if r.status_code != 200:
-        print("Instagram error:", r.status_code)
-        return None
-
-    html = r.text
-
-    # Extract JSON from script tag
-    match = re.search(r'"user":({.*?}),"viewer"', html)
-
-    if not match:
-        print("User JSON not found")
         return None
 
     try:
-        user_data = json.loads(match.group(1))
-        return {"data":{"user":user_data}}
+        return r.json()
     except:
         return None
 @bot.message_handler(commands=['start'])
@@ -162,6 +156,7 @@ def callback_handler(call):
             "Load more posts:",
             reply_markup=markup
         ) 
+print(fetch_profile("cristiano"))
 bot.infinity_polling()
         
         
