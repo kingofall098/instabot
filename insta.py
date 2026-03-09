@@ -6,7 +6,7 @@ import json
 import time
 import random
 time.sleep(random.uniform(2,4))
-TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
+TOKEN = "8628280617:AAEHHRQZ2dxsxoFWvmLs1PVO_wSCRn0rHPc"
 
 bot = telebot.TeleBot(TOKEN)
 
