@@ -1,4 +1,219 @@
-# ================================
+# ==============================
+# IMPORT LIBRARIES
+# ==============================
+
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import requests
+import re
+import json
+import time
+
+# ==============================
+# BOT CONFIG
+# ==============================
+
+TOKEN = "8780791852:AAHqVZYRVc7QEyzCNxzAqIdfDCZuoMPZtYY"
+
+bot = telebot.TeleBot(TOKEN)
+
+# cooldown system
+user_last_request = {}
+COOLDOWN = 8
+
+
+# ==============================
+# EXTRACT USERNAME FROM TEXT
+# ==============================
+
+def extract_username(text):
+
+    text = text.strip()
+
+    match = re.search(r"instagram\.com/([A-Za-z0-9_.]+)", text)
+
+    if match:
+        return match.group(1)
+
+    return text
+
+
+# ==============================
+# FETCH PROFILE DATA
+# ==============================
+
+def fetch_profile_data(username):
+
+    url = f"https://www.instagram.com/{username}/"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    r = requests.get(url, headers=headers)
+
+    if r.status_code != 200:
+        return None
+
+    html = r.text
+
+    match = re.search(r"window\._sharedData = (.*?);</script>", html)
+
+    if not match:
+        return None
+
+    data = json.loads(match.group(1))
+
+    return data
+
+
+# ==============================
+# START COMMAND
+# ==============================
+
+@bot.message_handler(commands=['start'])
+def start(message):
+
+    bot.send_message(
+        message.chat.id,
+        "📸 Instagram Media Bot\n\nSend an Instagram username or profile link."
+    )
+
+
+# ==============================
+# USERNAME HANDLER
+# ==============================
+
+@bot.message_handler(func=lambda m: True)
+def handle_username(message):
+
+    username = extract_username(message.text)
+
+    data = fetch_profile_data(username)
+
+    if not data:
+        bot.send_message(message.chat.id, "❌ Profile not found.")
+        return
+
+    user = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]
+
+    followers = user["edge_followed_by"]["count"]
+    following = user["edge_follow"]["count"]
+    posts = user["edge_owner_to_timeline_media"]["count"]
+
+    profile_pic = user["profile_pic_url_hd"]
+    bio = user["biography"]
+
+    text = f"""
+📸 Instagram Profile
+
+👤 Username: {username}
+
+👥 Followers: {followers}
+➡ Following: {following}
+📦 Posts: {posts}
+
+📄 Bio:
+{bio}
+
+Choose what to download:
+"""
+
+    markup = InlineKeyboardMarkup()
+
+    btn1 = InlineKeyboardButton("Latest Posts", callback_data=f"posts|{username}")
+    btn2 = InlineKeyboardButton("Profile Picture", callback_data=f"dp|{username}")
+
+    markup.row(btn1, btn2)
+
+    bot.send_photo(
+        message.chat.id,
+        profile_pic,
+        caption=text,
+        reply_markup=markup
+    )
+
+
+# ==============================
+# CALLBACK HANDLER
+# ==============================
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+
+    user_id = call.from_user.id
+    now = time.time()
+
+    if user_id in user_last_request:
+
+        elapsed = now - user_last_request[user_id]
+
+        if elapsed < COOLDOWN:
+
+            wait = int(COOLDOWN - elapsed)
+
+            bot.answer_callback_query(
+                call.id,
+                f"Please wait {wait} seconds.",
+                show_alert=True
+            )
+            return
+
+    user_last_request[user_id] = now
+
+    action, username = call.data.split("|")
+
+    data = fetch_profile_data(username)
+
+    if not data:
+        bot.send_message(call.message.chat.id, "Profile not found.")
+        return
+
+    user = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]
+
+    # ==========================
+    # PROFILE PICTURE
+    # ==========================
+
+    if action == "dp":
+
+        bot.send_photo(
+            call.message.chat.id,
+            user["profile_pic_url_hd"]
+        )
+
+    # ==========================
+    # LATEST POSTS
+    # ==========================
+
+    elif action == "posts":
+
+        bot.send_message(call.message.chat.id, "Fetching latest posts...")
+
+        edges = user["edge_owner_to_timeline_media"]["edges"]
+
+        count = 0
+
+        for post in edges:
+
+            node = post["node"]
+
+            if node["is_video"]:
+                bot.send_video(call.message.chat.id, node["video_url"])
+            else:
+                bot.send_photo(call.message.chat.id, node["display_url"])
+
+            count += 1
+
+            if count >= 5:
+                break
+
+
+# ==============================
+# RUN BOT
+# ==============================
+
+bot.infinity_polling()# ================================
 # IMPORT LIBRARIES
 # ================================
 import telebot
