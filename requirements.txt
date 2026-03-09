@@ -1,4 +1,6 @@
 pyTelegramBotAPI
 psycopg2-binary
 instaloader
+requests
+
 
