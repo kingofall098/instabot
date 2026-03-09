@@ -26,16 +26,15 @@ def extract_username(text):
     return text
 def fetch_profile_html(username):
 
+    import random
+    time.sleep(random.uniform(2,4))
+
     url = f"https://www.instagram.com/{username}/"
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
-        "X-IG-App-ID": "936619743392459",
-        "X-ASBD-ID": "198387",
-        "Referer": "https://www.instagram.com/",
-        "Origin": "https://www.instagram.com"
+        "Referer": "https://www.instagram.com/"
     }
 
     r = requests.get(url, headers=headers)
@@ -46,14 +45,18 @@ def fetch_profile_html(username):
 
     html = r.text
 
-    match = re.search(r"window\._sharedData = (.*?);</script>", html)
+    # Extract JSON from script tag
+    match = re.search(r'"user":({.*?}),"viewer"', html)
 
     if not match:
+        print("User JSON not found")
         return None
 
-    data = json.loads(match.group(1))
-
-    return data
+    try:
+        user_data = json.loads(match.group(1))
+        return {"data":{"user":user_data}}
+    except:
+        return None
 @bot.message_handler(commands=['start'])
 def start(message):
 
