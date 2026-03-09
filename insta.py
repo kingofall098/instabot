@@ -6,7 +6,7 @@ import json
 import time
 import random
 time.sleep(random.uniform(2,4))
-TOKEN = "8628280617:AAEHHRQZ2dxsxoFWvmLs1PVO_wSCRn0rHPc"
+TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -155,7 +155,8 @@ def callback_handler(call):
             call.message.chat.id,
             "Load more posts:",
             reply_markup=markup
-        ) 
+        )
+print("cristianos profile - ") 
 print(fetch_profile("cristiano"))
 bot.infinity_polling()
         
