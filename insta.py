@@ -1,29 +1,19 @@
-# =============================
-# IMPORT LIBRARIES
-# =============================
-
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import requests
 import re
+import json
 import time
-
-# =============================
-# BOT CONFIG
-# =============================
-
+import random
+time.sleep(random.uniform(2,4))
 TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
 
 bot = telebot.TeleBot(TOKEN)
 
-# cooldown system
+post_cache = {}
+
 user_last_request = {}
-COOLDOWN = 8
-
-# =============================
-# EXTRACT USERNAME
-# =============================
-
+COOLDOWN = 10
 def extract_username(text):
 
     text = text.strip()
@@ -34,58 +24,55 @@ def extract_username(text):
         return match.group(1)
 
     return text
+def fetch_profile_html(username):
 
-# =============================
-# FETCH PROFILE DATA
-# =============================
-
-def fetch_profile(username):
-
-    url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+    url = f"https://www.instagram.com/{username}/"
 
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "x-ig-app-id": "936619743392459"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "X-IG-App-ID": "936619743392459",
+        "X-ASBD-ID": "198387",
+        "Referer": "https://www.instagram.com/",
+        "Origin": "https://www.instagram.com"
     }
 
     r = requests.get(url, headers=headers)
 
     if r.status_code != 200:
+        print("Instagram error:", r.status_code)
         return None
 
-    try:
-        return r.json()
-    except:
-        return None
-    
-# =============================
-# START COMMAND
-# =============================
+    html = r.text
 
+    match = re.search(r"window\._sharedData = (.*?);</script>", html)
+
+    if not match:
+        return None
+
+    data = json.loads(match.group(1))
+
+    return data
 @bot.message_handler(commands=['start'])
 def start(message):
 
     bot.send_message(
         message.chat.id,
-        "📸 Instagram Downloader Bot\n\nSend an Instagram username."
+        "📸 Instagram Downloader\n\nSend an Instagram username."
     )
-    
-# =============================
-# PROFILE HANDLER
-# =============================
-
 @bot.message_handler(func=lambda m: True)
 def profile_handler(message):
 
     username = extract_username(message.text)
 
-    data = fetch_profile(username)
+    data = fetch_profile_html(username)
 
     if not data:
-        bot.send_message(message.chat.id, "❌ Profile not found")
+        bot.send_message(message.chat.id, "Profile not found")
         return
 
-    user = data["graphql"]["user"]
+    user = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]
 
     followers = user["edge_followed_by"]["count"]
     following = user["edge_follow"]["count"]
@@ -122,46 +109,27 @@ def profile_handler(message):
         caption=text,
         reply_markup=markup
     )
-    
-# =============================
-# BUTTON HANDLER
-# =============================
-
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-
-    user_id = call.from_user.id
-    now = time.time()
-
-    if user_id in user_last_request:
-
-        elapsed = now - user_last_request[user_id]
-
-        if elapsed < COOLDOWN:
-
-            wait = int(COOLDOWN - elapsed)
-
-            bot.answer_callback_query(
-                call.id,
-                f"Please wait {wait} seconds",
-                show_alert=True
-            )
-            return
-
-    user_last_request[user_id] = now
 
     action, username, start = call.data.split("|")
     start = int(start)
 
-    data = fetch_profile(username)
+    if username not in post_cache:
 
-    if not data:
-        bot.send_message(call.message.chat.id, "Profile not found")
-        return
+        data = fetch_profile_html(username)
 
-    user = data["graphql"]["user"]
+        if not data:
+            bot.send_message(call.message.chat.id, "Profile not found")
+            return
 
-    edges = user["edge_owner_to_timeline_media"]["edges"]
+        user = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]
+
+        edges = user["edge_owner_to_timeline_media"]["edges"]
+
+        post_cache[username] = edges
+
+    edges = post_cache[username]
 
     posts = edges[start:start+10]
 
@@ -173,25 +141,28 @@ def callback_handler(call):
             bot.send_video(call.message.chat.id, node["video_url"])
         else:
             bot.send_photo(call.message.chat.id, node["display_url"])
-
     next_start = start + 10
 
-    markup = InlineKeyboardMarkup()
+    if next_start < len(edges):
 
-    next_btn = InlineKeyboardButton(
-        "Next 10 Posts",
-        callback_data=f"posts|{username}|{next_start}"
-    )
+        markup = InlineKeyboardMarkup()
 
-    markup.add(next_btn)
+        btn = InlineKeyboardButton(
+            "Next 10 Posts",
+            callback_data=f"posts|{username}|{next_start}"
+        )
 
-    bot.send_message(
-        call.message.chat.id,
-        "Load more posts:",
-        reply_markup=markup
-    )
-# =============================
-# RUN BOT
-# =============================
+        markup.add(btn)
 
+        bot.send_message(
+            call.message.chat.id,
+            "Load more posts:",
+            reply_markup=markup
+        ) 
 bot.infinity_polling()
+        
+        
+        
+        
+        
+        
