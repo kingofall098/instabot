@@ -1,4 +1,108 @@
-# ===============================
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import instaloader
+import time
+
+BOT_TOKEN = "8628280617:AAEHHRQZ2dxsxoFWvmLs1PVO_wSCRn0rHPc"
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+L = instaloader.Instaloader(
+    download_pictures=False,
+    download_videos=False,
+    download_video_thumbnails=False,
+    save_metadata=False
+)
+
+user_profiles = {}
+
+@bot.message_handler(commands=['start'])
+def start(message):
+
+    bot.send_message(
+        message.chat.id,
+        "Send an Instagram username to download last 10 posts."
+    )
+@bot.message_handler(func=lambda message: True)
+def receive_username(message):
+
+    username = message.text.strip()
+
+    user_profiles[message.from_user.id] = username
+
+    markup = InlineKeyboardMarkup()
+
+    button = InlineKeyboardButton(
+        "⬇ Download Last 10 Posts",
+        callback_data="download_posts"
+    )
+
+    markup.add(button)
+
+    bot.send_message(
+        message.chat.id,
+        f"Username received: {username}\n\nPress the button to fetch media.",
+        reply_markup=markup
+    )
+    
+@bot.callback_query_handler(func=lambda call: call.data == "download_posts")
+def download_posts(call):
+
+    user_id = call.from_user.id
+    username = user_profiles.get(user_id)
+
+    if not username:
+        bot.send_message(call.message.chat.id, "Please send a username first.")
+        return
+
+    try:
+        profile = instaloader.Profile.from_username(L.context, username)
+
+        if profile.is_private:
+            bot.send_message(call.message.chat.id, "❌ This account is private.")
+            return
+
+        posts = profile.get_posts()
+
+        count = 0
+
+        for post in posts:
+
+            if count >= 10:
+                break
+
+            try:
+
+                if post.is_video:
+                    bot.send_video(
+                        call.message.chat.id,
+                        post.video_url
+                    )
+                else:
+                    bot.send_photo(
+                        call.message.chat.id,
+                        post.url
+                    )
+
+                count += 1
+
+                time.sleep(2)
+
+            except Exception as e:
+                print("Send error:", e)
+    except Exception as e:
+
+        bot.send_message(
+            call.message.chat.id,
+            "⚠️ Failed to fetch media. Username may not exist."
+        )
+
+        print(e)
+        
+print("Bot running...")
+
+bot.infinity_polling()
+    # ===============================
 # IMPORT LIBRARIES
 # ===============================
 
