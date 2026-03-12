@@ -44,7 +44,7 @@ session.headers.update({
 
 PROXY_USER = "ufvsfnff"
 PROXY_PASS = "y54tcfrt0eou"
-PROXY_HOST = "https://ipv4.webshare.io"
+PROXY_HOST = "ipv4.webshare.io"
 PROXY_PORT = "6754"
 
 
