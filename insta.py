@@ -42,23 +42,14 @@ session.headers.update({
 # PROXY CONFIG (STICKY RESIDENTIAL)
 # =====================================
 
-PROXY_USER = "ufvsfnff"
-PROXY_PASS = "y54tcfrt0eou"
-PROXY_HOST = "ipv4.webshare.io"
-PROXY_PORT = "6754"
-
-
 def get_proxy():
 
-    session_id = random.randint(100000,999999)
-
-    proxy = f"http://{PROXY_USER}-session-{session_id}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+    proxy = "http://ufvsfnff:y54tcfrt0eou@ipv4.webshare.io:6754"
 
     return {
         "http": proxy,
         "https": proxy
     }
-
 
 # =====================================
 # USERNAME EXTRACTION
@@ -260,7 +251,16 @@ def callback_handler(call):
             call.message.chat.id,
             "✅ No more posts."
         )
+import requests
 
+proxy = {
+    "http": "http://USERNAME:PASSWORD@ipv4.webshare.io:6754",
+    "https": "http://USERNAME:PASSWORD@ipv4.webshare.io:6754"
+}
+
+r = requests.get("https://api.ipify.org", proxies=proxy)
+
+print("Proxy IP:", r.text)
 
 # =====================================
 # RUN BOT
