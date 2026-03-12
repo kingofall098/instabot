@@ -14,7 +14,7 @@ import time
 # BOT CONFIG
 # =====================================
 
-TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ
+TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
 
 bot = telebot.TeleBot(TOKEN)
 
