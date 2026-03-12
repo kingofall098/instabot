@@ -53,39 +53,23 @@ def extract_username(text):
 
 def fetch_profile(username):
 
-    url = f"https://www.instagram.com/{username}/"
+    url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0",
+        "x-ig-app-id": "936619743392459"
     }
 
     r = session.get(url, headers=headers)
 
+    print("Status:", r.status_code)
+
     if r.status_code != 200:
-        print("Instagram error:", r.status_code)
         return None
 
-    html = r.text
+    data = r.json()
 
-    # find embedded JSON
-    match = re.search(r'<script type="application/json">(.*?)</script>', html)
-
-    if not match:
-        print("Embedded JSON not found")
-        return None
-
-    try:
-        data = json.loads(match.group(1))
-    except:
-        return None
-
-    # navigate to user media
-    try:
-        user = data["props"]["pageProps"]["graphql"]["user"]
-        return user["edge_owner_to_timeline_media"]
-    except:
-        print("User media not found")
-        return None
+    return data["data"]["user"]["edge_owner_to_timeline_media"]
 # =====================================
 # START COMMAND
 # =====================================
@@ -232,5 +216,8 @@ def callback_handler(call):
 
 bot.remove_webhook()
 time.sleep(1)
+
+
+bot.infinity_polling()
 
 bot.infinity_polling()
