@@ -1,215 +1,221 @@
+# =====================================
+# IMPORT LIBRARIES
+# =====================================
 
 import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import requests
+import re
 import json
-import os
+import time
 
-TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
-ADMIN_ID = 8648483733  # put your telegram id here
+
+# =====================================
+# BOT CONFIG
+# =====================================
+
+TOKEN = "8628280617:AAEHHRQZ2dxsxoFWvmLs1PVO_wSCRn0rHPc"
 
 bot = telebot.TeleBot(TOKEN)
 
-DATA_FILE = "data.json"
-REQUIRED_GROUP = None
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+session = requests.Session()
+
+session.headers.update({
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "en-US,en;q=0.9"
+})
+
+post_cache = {}
+
+user_last_request = {}
+COOLDOWN = 10
 
 
-# ---------- LOAD DATA ----------
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"users": [], "media_count": 0}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+# =====================================
+# EXTRACT USERNAME
+# =====================================
+
+def extract_username(text):
+
+    text = text.strip()
+
+    match = re.search(r"instagram\.com/([A-Za-z0-9_.]+)", text)
+
+    if match:
+        return match.group(1)
+
+    return text
 
 
-# ---------- SAVE DATA ----------
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+# =====================================
+# FETCH PROFILE HTML
+# =====================================
 
+def fetch_profile(username):
 
-data = load_data()
-def is_user_joined(user_id):
+    url = f"https://www.instagram.com/{username}/"
 
-    if REQUIRED_GROUP is None:
-        return True
+    r = session.get(url)
+
+    if r.status_code != 200:
+        print("Instagram error:", r.status_code)
+        return None
+
+    html = r.text
+
+    match = re.search(r'"edge_owner_to_timeline_media":({.*?})},"edge_felix_video_timeline"', html)
+
+    if not match:
+        print("Post JSON not found")
+        return None
 
     try:
-        member = bot.get_chat_member(REQUIRED_GROUP, user_id)
-        return member.status in ["member", "administrator", "creator"]
+        data = json.loads(match.group(1))
+        return data
     except:
-        return False
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+        return None
 
-def firewall(message):
 
-    user_id = message.from_user.id
+# =====================================
+# START COMMAND
+# =====================================
 
-    if not is_user_joined(user_id):
-
-        markup = InlineKeyboardMarkup()
-
-        join_btn = InlineKeyboardButton(
-            "🔗 Join Group",
-            url=f"https://t.me/{REQUIRED_GROUP.replace('@','')}"
-        )
-
-        markup.add(join_btn)
-
-        bot.send_message(
-            message.chat.id,
-            "🚫 Access Denied\n\n"
-            "You must join the group before using this bot.",
-            reply_markup=markup
-        )
-
-        return False
-
-    return True
-# ---------- START ----------
-# @bot.message_handler(commands=['start'])
-# def start(message):
-
-#     user_id = message.from_user.id
-
-#     if user_id not in data["users"]:
-#         data["users"].append(user_id)
-#         save_data(data)
-
-#     text = (
-#         "👋 Welcome!\n\n"
-#         "This is an Anonymous Media Relay Bot.\n\n"
-#         "Send any media and the bot will resend it anonymously."
-#     )
-
-#     bot.send_message(message.chat.id, text)
 @bot.message_handler(commands=['start'])
 def start(message):
 
-    if not firewall(message):
+    bot.send_message(
+        message.chat.id,
+        "📸 Instagram Downloader Bot\n\nSend an Instagram username."
+    )
+
+
+# =====================================
+# PROFILE HANDLER
+# =====================================
+
+@bot.message_handler(func=lambda m: True)
+def profile_handler(message):
+
+    username = extract_username(message.text)
+
+    data = fetch_profile(username)
+
+    if not data:
+        bot.send_message(message.chat.id, "❌ Profile not found")
         return
 
-    user_id = message.from_user.id
+    edges = data["edges"]
 
-    if user_id not in data["users"]:
-        data["users"].append(user_id)
-        save_data(data)
+    post_cache[username] = edges
+
+    markup = InlineKeyboardMarkup()
+
+    btn = InlineKeyboardButton(
+        "Download Posts",
+        callback_data=f"posts|{username}|0"
+    )
+
+    markup.add(btn)
 
     bot.send_message(
         message.chat.id,
-        "👋 Welcome!\n\n"
-        "This is an Anonymous Media Relay Bot.\n\n"
-        "Send any media and the bot will resend it anonymously."
-    )
-broadcast_mode = False
-def admin_keyboard():
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-
-    stats = KeyboardButton("📊 Statistics")
-    broadcast = KeyboardButton("📢 Broadcast")
-
-    kb.add(stats)
-    kb.add(broadcast)
-
-    return kb
-
-@bot.message_handler(func=lambda m: m.text == "📊 Statistics")
-def show_stats(message):
-
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    users = len(data["users"])
-    media = data["media_count"]
-
-    text = (
-        "📊 Bot Statistics\n\n"
-        f"👥 Total Users: {users}\n"
-        f"📤 Total Media Sent: {media}"
+        f"Found {len(edges)} posts.\n\nClick below to download.",
+        reply_markup=markup
     )
 
-    bot.send_message(message.chat.id, text)
-@bot.message_handler(func=lambda m: m.text == "📢 Broadcast")
-def broadcast_start(message):
 
-    global broadcast_mode
+# =====================================
+# BUTTON HANDLER
+# =====================================
 
-    if message.from_user.id != ADMIN_ID:
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+
+    user_id = call.from_user.id
+    now = time.time()
+
+    if user_id in user_last_request:
+
+        elapsed = now - user_last_request[user_id]
+
+        if elapsed < COOLDOWN:
+
+            wait = int(COOLDOWN - elapsed)
+
+            bot.answer_callback_query(
+                call.id,
+                f"Please wait {wait} seconds",
+                show_alert=True
+            )
+            return
+
+    user_last_request[user_id] = now
+
+    action, username, start = call.data.split("|")
+
+    start = int(start)
+
+    edges = post_cache.get(username)
+
+    if not edges:
+
+        bot.send_message(call.message.chat.id, "Cache expired, send username again.")
         return
 
-    broadcast_mode = True
+    posts = edges[start:start+10]
 
-    bot.send_message(message.chat.id, "Send the message you want to broadcast.")
-@bot.message_handler(func=lambda m: broadcast_mode and m.from_user.id == ADMIN_ID)
-def send_broadcast(message):
+    for post in posts:
 
-    global broadcast_mode
+        node = post["node"]
 
-    for user in data["users"]:
-        try:
-            bot.send_message(user, message.text)
-        except:
-            pass
+        if node["is_video"]:
 
-    broadcast_mode = False
+            bot.send_video(
+                call.message.chat.id,
+                node["video_url"]
+            )
 
-    bot.send_message(message.chat.id, "✅ Broadcast sent to all users.")
-# ---------- MEDIA HANDLER ----------
-@bot.message_handler(content_types=[
-    'photo','video','document','audio',
-    'voice','sticker','animation','video_note'
-])
-def relay_media(message):
+        else:
 
-    chat_id = message.chat.id
-
-    try:
-
-        if message.photo:
-            bot.send_photo(chat_id, message.photo[-1].file_id)
-
-        elif message.video:
-            bot.send_video(chat_id, message.video.file_id)
-
-        elif message.document:
-            bot.send_document(chat_id, message.document.file_id)
-
-        elif message.audio:
-            bot.send_audio(chat_id, message.audio.file_id)
-
-        elif message.voice:
-            bot.send_voice(chat_id, message.voice.file_id)
-
-        elif message.animation:
-            bot.send_animation(chat_id, message.animation.file_id)
-
-        elif message.sticker:
-            bot.send_sticker(chat_id, message.sticker.file_id)
-
-        elif message.video_note:
-            bot.send_video_note(chat_id, message.video_note.file_id)
-
-        # update stats
-        data["media_count"] += 1
-        save_data(data)
-
-        bot.delete_message(chat_id, message.message_id)
-
-    except Exception as e:
-        print(e)
+            bot.send_photo(
+                call.message.chat.id,
+                node["display_url"]
+            )
 
 
-# ---------- ADMIN PANEL ----------
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
+# =====================================
+# NEXT PAGE BUTTON
+# =====================================
 
-    if message.from_user.id != ADMIN_ID:
-        return
+    next_start = start + 10
 
-    bot.send_message(
-        message.chat.id,
-        "🔐 Admin Panel",
-        reply_markup=admin_keyboard()
-    )
+    if next_start < len(edges):
 
+        markup = InlineKeyboardMarkup()
+
+        btn = InlineKeyboardButton(
+            "Next 10 Posts",
+            callback_data=f"posts|{username}|{next_start}"
+        )
+
+        markup.add(btn)
+
+        bot.send_message(
+            call.message.chat.id,
+            "Load more posts:",
+            reply_markup=markup
+        )
+
+    else:
+
+        bot.send_message(
+            call.message.chat.id,
+            "✅ No more posts."
+        )
+
+
+# =====================================
+# RUN BOT
+# =====================================
 
 bot.infinity_polling()
