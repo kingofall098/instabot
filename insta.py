@@ -55,7 +55,11 @@ def fetch_profile(username):
 
     url = f"https://www.instagram.com/{username}/"
 
-    r = session.get(url)
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    r = session.get(url, headers=headers)
 
     if r.status_code != 200:
         print("Instagram error:", r.status_code)
@@ -63,19 +67,25 @@ def fetch_profile(username):
 
     html = r.text
 
-    match = re.search(r'"edge_owner_to_timeline_media":({.*?})},"edge_felix_video_timeline"', html)
+    # find embedded JSON
+    match = re.search(r'<script type="application/json">(.*?)</script>', html)
 
     if not match:
-        print("Post JSON not found")
+        print("Embedded JSON not found")
         return None
 
     try:
         data = json.loads(match.group(1))
-        return data
     except:
         return None
 
-
+    # navigate to user media
+    try:
+        user = data["props"]["pageProps"]["graphql"]["user"]
+        return user["edge_owner_to_timeline_media"]
+    except:
+        print("User media not found")
+        return None
 # =====================================
 # START COMMAND
 # =====================================
