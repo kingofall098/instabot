@@ -226,6 +226,11 @@ def callback_handler(call):
 
 # =====================================
 # RUN BOT
-# =====================================
+# =============================
+# RUN BOT
+# =============================
+
+bot.remove_webhook()
+time.sleep(1)
 
 bot.infinity_polling()
