@@ -72,6 +72,11 @@ from playwright.sync_api import sync_playwright
 
 def fetch_profile(username):
 
+    from playwright.sync_api import sync_playwright
+    import re
+    import random
+    import time
+
     with sync_playwright() as p:
 
         browser = p.chromium.launch(headless=True)
@@ -88,33 +93,35 @@ def fetch_profile(username):
 
         page.wait_for_timeout(5000)
 
+        # =========================
+        # PUT YOUR CODE HERE
+        # =========================
+
         html = page.content()
 
-        browser.close()
-
-        import re
-
-        shortcodes = re.findall(r'"shortcode":"(.*?)"', html)
-
-        if not shortcodes:
-            print("No posts found")
-            return None
+        links = re.findall(r'href="/(p|reel)/([^/]+)/"', html)
 
         posts = []
 
-        for code in shortcodes[:20]:
+        for post_type, code in links[:20]:
 
-            if "/reel/" in code:
-                media_url = f"https://www.instagram.com/reel/{code}/"
+            if post_type == "reel":
+                url = f"https://www.instagram.com/reel/{code}/"
             else:
-                media_url = f"https://www.instagram.com/p/{code}/"
+                url = f"https://www.instagram.com/p/{code}/"
 
             posts.append({
                 "node": {
                     "is_video": False,
-                    "display_url": media_url
+                    "display_url": url
                 }
             })
+
+        browser.close()
+
+        if not posts:
+            print("No posts found")
+            return None
 
         return {"edges": posts}
 # ==========================
