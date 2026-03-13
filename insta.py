@@ -87,7 +87,7 @@ def fetch_profile(username):
             context.add_cookies([
                 {
                     "name": "sessionid",
-                    "value": "80484585414%3AD73TCLEIfkcHlo%3A18%3AAYgFHiooPrlXGxU7ndzIutGt94Ou_OigLOo0LIstlA",
+                    "value": "80400887510%3AdCUmCn1fhOV9ge%3A19%3AAYijmO-c0tBG32UWtbQmWC2A023iF_nh_wL3qMYkdg",
                     "domain": ".instagram.com",
                     "path": "/",
                     "httpOnly": True,
