@@ -57,66 +57,49 @@ def fetch_profile(username):
 
         page.goto(url)
 
-        page.wait_for_timeout(6000)
+        page.wait_for_timeout(5000)
 
         print("Page title:", page.title())
         print("Current URL:", page.url)
 
-        # detect login page
-        if "login" in page.url:
-            print("Instagram login wall detected")
-            return None
+        # ----------------------------
+        # PUT THE NEW CODE HERE
+        # ----------------------------
 
-        # detect suspended
-        if "suspended" in page.url:
-            print("Instagram account/session suspended")
-            return None
+        page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=15000)
 
-        # wait for posts to appear
-        try:
-            page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=8000)
-        except:
-            print("Post selector not found")
+        elements = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
 
-        html = page.content()
-
-        print("HTML length:", len(html))
-
-        links = re.findall(r'href="/(p|reel)/([^/]+)/"', html)
-
-        print("Links found:", len(links))
-
-        if len(links) == 0:
-            print("No post links detected")
-            print("First 500 chars of HTML:")
-            print(html[:500])
-            return None
+        print("Elements found:", len(elements))
 
         posts = []
 
-        for post_type, code in links:
+        for el in elements[:20]:
 
-            if post_type == "reel":
-                media_url = f"https://www.instagram.com/reel/{code}/"
-            else:
-                media_url = f"https://www.instagram.com/p/{code}/"
+            href = el.get_attribute("href")
+
+            if not href:
+                continue
+
+            link = "https://www.instagram.com" + href.split("?")[0]
 
             posts.append({
                 "node": {
                     "is_video": False,
-                    "display_url": media_url
+                    "display_url": link
                 }
             })
 
-        print("Posts collected:", len(posts))
+        if not posts:
+            print("No posts detected from DOM")
+            return None
 
-        return {"edges": posts[:50]}
+        return {"edges": posts}
 
     except Exception as e:
 
         print("FETCH ERROR:", e)
-        return None
-        
+        return None        
 # =========================
 # START COMMAND
 # =========================
