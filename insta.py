@@ -70,19 +70,55 @@ def fetch_profile(username):
         page.wait_for_selector("article", timeout=30000)
 
         # scroll page to load more posts
-        for i in range(10):
+        # wait for first posts
+        page.wait_for_selector("article", timeout=30000)
 
-            print("Scrolling page...", i+1)
+        last_count = 0
+        same_count = 0
+
+        while True:
 
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(3)
 
-            time.sleep(2)
+            links = page.evaluate("""
+                Array.from(document.querySelectorAll("article a"))
+                    .map(a => a.href)
+            """)
 
-        # extract links from post grid
-        links = page.evaluate("""
-        Array.from(document.querySelectorAll("article a"))
-            .map(a => a.href)
-        """)
+            posts = set()
+
+            for link in links:
+                if "/p/" in link or "/reel/" in link:
+                    posts.add(link.split("?")[0])
+
+            print("Posts loaded:", len(posts))
+
+            if len(posts) == last_count:
+                same_count += 1
+            else:
+                same_count = 0
+
+            last_count = len(posts)
+
+            # stop after scrolling without new posts twice
+            if same_count >= 2:
+                break
+        posts_list = []
+
+        for link in posts:
+            posts_list.append({
+                "node": {
+                    "display_url": link
+                }
+            })
+
+        print("Total posts detected:", len(posts_list))
+
+        if not posts_list:
+            return None
+
+        return {"edges": posts_list}
 
         posts = []
         seen = set()
