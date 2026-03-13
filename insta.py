@@ -34,7 +34,7 @@ play = sync_playwright().start()
 
 browser = play.chromium.launch_persistent_context(
     user_data_dir="./ig_profile",   # keeps login session
-    headless=False
+    headless=True
 )
 
 page = browser.new_page()
@@ -99,34 +99,7 @@ def fetch_profile(username):
     except Exception as e:
 
         print("FETCH ERROR:", e)
-        return None       
-def fetch_media(post_url):
-
-    try:
-
-        page.goto(post_url)
-
-        page.wait_for_timeout(3000)
-
-        html = page.content()
-
-        import re
-
-        video = re.search(r'property="og:video" content="([^"]+)"', html)
-        image = re.search(r'property="og:image" content="([^"]+)"', html)
-
-        if video:
-            return "video", video.group(1)
-
-        if image:
-            return "photo", image.group(1)
-
-        return None, None
-
-    except Exception as e:
-
-        print("Media fetch error:", e)
-        return None, None
+        return None        
 # =========================
 # START COMMAND
 # =========================
@@ -208,22 +181,11 @@ def callback_handler(call):
 
         node = post["node"]
 
-        post_url = node["display_url"]
+        bot.send_message(
+            call.message.chat.id,
+            node["display_url"]
+        )
 
-        media_type, media_url = fetch_media(post_url)
-
-        if media_type == "video":
-
-            bot.send_video(call.message.chat.id, media_url)
-
-        elif media_type == "photo":
-
-            bot.send_photo(call.message.chat.id, media_url)
-
-        else:
-
-            bot.send_message(call.message.chat.id, post_url)
-        time.sleep(random.uniform(2,4))
     next_start = start + 10
 
     if next_start < len(edges):
