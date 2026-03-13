@@ -56,17 +56,17 @@ def fetch_profile(username):
         print("Opening:", url)
 
         page.goto(url)
+        # wait for first posts
         page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=15000)
 
-        # Scroll to load more posts
-        for i in range(4):
+        # scroll page to load more posts
+        for i in range(6):
 
             print("Scrolling page...", i+1)
-            print("Page title:", page.title())
-            print("Current URL:", page.url)
-            page.mouse.wheel(0, 4000)
 
-            time.sleep(2)
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+
+            time.sleep(3)
 
         elements = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
 
