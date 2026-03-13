@@ -12,7 +12,7 @@ import re
 # BOT TOKEN
 # =========================
 
-TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
+TOKEN = "PUT_YOUR_TOKEN_HERE"
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
@@ -25,7 +25,7 @@ post_cache = {}
 
 
 # =========================
-# PLAYWRIGHT BROWSER
+# START PLAYWRIGHT
 # =========================
 
 print("Starting browser...")
@@ -33,15 +33,40 @@ print("Starting browser...")
 play = sync_playwright().start()
 
 browser = play.chromium.launch_persistent_context(
-    user_data_dir="./ig_profile",   # keeps login session
-    headless=True
+    user_data_dir="./ig_session",
+    headless=True,
+
+    args=[
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox"
+    ],
+
+    viewport={"width":1280,"height":800},
+
+    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
 )
 
 page = browser.new_page()
 
 
 # =========================
-# FETCH PROFILE
+# HUMAN SCROLL
+# =========================
+
+def human_scroll():
+
+    page.evaluate("""
+    window.scrollBy({
+        top: window.innerHeight,
+        behavior: 'smooth'
+    });
+    """)
+
+    time.sleep(random.uniform(2,4))
+
+
+# =========================
+# FETCH PROFILE POSTS
 # =========================
 
 def fetch_profile(username):
@@ -53,50 +78,49 @@ def fetch_profile(username):
         time.sleep(delay)
 
         url = f"https://www.instagram.com/{username}/"
+
         print("Opening:", url)
 
         page.goto(url, wait_until="domcontentloaded")
 
-        page.wait_for_timeout(5000)
+        time.sleep(random.uniform(4,6))
 
         print("Page title:", page.title())
         print("Current URL:", page.url)
 
         if "login" in page.url:
-            print("Instagram redirected to login")
+            print("Instagram login wall")
             return None
 
-        # wait for posts
         page.wait_for_selector("article", timeout=30000)
 
         posts = set()
 
         last_count = 0
-        no_new_scroll = 0
+        no_change = 0
 
         while True:
 
             links = page.evaluate("""
-                Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
-                    .map(a => a.href)
+            Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
+            .map(a => a.href)
             """)
 
             for link in links:
                 posts.add(link.split("?")[0])
 
-            print("Posts loaded:", len(posts))
+            print("Posts collected:", len(posts))
 
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(3)
+            human_scroll()
 
             if len(posts) == last_count:
-                no_new_scroll += 1
+                no_change += 1
             else:
-                no_new_scroll = 0
+                no_change = 0
 
             last_count = len(posts)
 
-            if no_new_scroll >= 3:
+            if no_change >= 4:
                 break
 
         posts_list = []
@@ -109,10 +133,7 @@ def fetch_profile(username):
                 }
             })
 
-        print("Total posts detected:", len(posts_list))
-
-        if not posts_list:
-            return None
+        print("Total posts:", len(posts_list))
 
         return {"edges": posts_list}
 
@@ -120,7 +141,39 @@ def fetch_profile(username):
 
         print("FETCH ERROR:", e)
         return None
-    
+
+
+# =========================
+# FETCH MEDIA FROM POST
+# =========================
+
+def fetch_media(post_url):
+
+    try:
+
+        page.goto(post_url)
+
+        time.sleep(3)
+
+        html = page.content()
+
+        video = re.search(r'property="og:video" content="([^"]+)"', html)
+        image = re.search(r'property="og:image" content="([^"]+)"', html)
+
+        if video:
+            return "video", video.group(1)
+
+        if image:
+            return "photo", image.group(1)
+
+        return None, None
+
+    except Exception as e:
+
+        print("Media fetch error:", e)
+        return None, None
+
+
 # =========================
 # START COMMAND
 # =========================
@@ -175,7 +228,7 @@ def profile_handler(message):
 
 
 # =========================
-# BUTTON HANDLER
+# PAGINATION HANDLER
 # =========================
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -202,10 +255,23 @@ def callback_handler(call):
 
         node = post["node"]
 
-        bot.send_message(
-            call.message.chat.id,
-            node["display_url"]
-        )
+        post_url = node["display_url"]
+
+        media_type, media_url = fetch_media(post_url)
+
+        if media_type == "video":
+
+            bot.send_video(call.message.chat.id, media_url)
+
+        elif media_type == "photo":
+
+            bot.send_photo(call.message.chat.id, media_url)
+
+        else:
+
+            bot.send_message(call.message.chat.id, post_url)
+
+        time.sleep(random.uniform(2,4))
 
     next_start = start + 10
 
