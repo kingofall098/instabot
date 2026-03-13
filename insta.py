@@ -44,6 +44,8 @@ page = browser.new_page()
 # =========================
 # FETCH PROFILE
 # =========================
+
+
 import requests
 import json
 
@@ -55,56 +57,24 @@ def fetch_profile(username):
         print("Delay:", delay)
         time.sleep(delay)
 
-        # ----------------------------
-        # STEP 1: GET USER ID
-        # ----------------------------
-
-        url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}"
+        url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
 
         headers = {
-            "User-Agent": "Mozilla/5.0"
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "*/*",
+            "X-Requested-With": "XMLHttpRequest"
         }
 
         r = requests.get(url, headers=headers)
 
+        print("Status:", r.status_code)
+
         if r.status_code != 200:
-            print("User lookup failed:", r.status_code)
             return None
 
         data = r.json()
 
-        user_id = data["data"]["user"]["id"]
-
-        print("User ID:", user_id)
-
-
-        # ----------------------------
-        # STEP 2: GET POSTS
-        # ----------------------------
-
-        query_hash = "003056d32c2554def87228bc3fd9668a"
-
-        variables = {
-            "id": user_id,
-            "first": 50
-        }
-
-        graphql_url = "https://www.instagram.com/graphql/query/"
-
-        params = {
-            "query_hash": query_hash,
-            "variables": json.dumps(variables)
-        }
-
-        r = requests.get(graphql_url, headers=headers, params=params)
-
-        if r.status_code != 200:
-            print("GraphQL failed:", r.status_code)
-            return None
-
-        data = r.json()
-
-        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
+        edges = data["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
         posts = []
 
@@ -126,6 +96,7 @@ def fetch_profile(username):
 
         print("FETCH ERROR:", e)
         return None
+        
 # =========================
 # START COMMAND
 # =========================
