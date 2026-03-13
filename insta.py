@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright
 import time
 import random
 import re
+import json
 
 
 # =========================
@@ -33,7 +34,7 @@ print("Starting browser...")
 play = sync_playwright().start()
 
 browser = play.chromium.launch_persistent_context(
-    user_data_dir="./ig_profile",   # keeps login session
+    user_data_dir="./ig_profile",
     headless=True
 )
 
@@ -66,20 +67,10 @@ def fetch_profile(username):
             print("Instagram requires login session")
             return None
 
-        page.goto(url, wait_until="domcontentloaded")
 
-        page.wait_for_timeout(4000)
-
-        print("Page title:", page.title())
-        print("Current URL:", page.url)
-
-        if "accounts/login" in page.url:
-            print("Instagram requires login session")
-            return None
-
-        # ----------------------------
-        # EXTRACT POSTS FROM PAGE JSON
-        # ----------------------------
+        # =========================
+        # GET HTML
+        # =========================
 
         html = page.content()
 
@@ -89,10 +80,8 @@ def fetch_profile(username):
             print("SharedData not found")
             return None
 
-        data = match.group(1)
 
-        import json
-        data = json.loads(data)
+        data = json.loads(match.group(1))
 
         edges = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
@@ -111,7 +100,14 @@ def fetch_profile(username):
         print("Total posts detected:", len(posts))
 
         return {"edges": posts}
-    
+
+
+    except Exception as e:
+
+        print("FETCH ERROR:", e)
+        return None
+
+
 # =========================
 # START COMMAND
 # =========================
@@ -142,12 +138,13 @@ def profile_handler(message):
             message.chat.id,
             "❌ Could not fetch profile posts"
         )
-
         return
+
 
     edges = data["edges"]
 
     post_cache[username] = edges
+
 
     markup = InlineKeyboardMarkup()
 
@@ -157,6 +154,7 @@ def profile_handler(message):
     )
 
     markup.add(btn)
+
 
     bot.send_message(
         message.chat.id,
@@ -184,10 +182,11 @@ def callback_handler(call):
             call.message.chat.id,
             "Cache expired. Send username again."
         )
-
         return
 
+
     posts = edges[start:start+10]
+
 
     for post in posts:
 
@@ -198,7 +197,9 @@ def callback_handler(call):
             node["display_url"]
         )
 
+
     next_start = start + 10
+
 
     if next_start < len(edges):
 
