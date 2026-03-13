@@ -76,21 +76,27 @@ def fetch_profile(username):
         last_count = 0
         same_count = 0
 
+        last_count = 0
+        same_count = 0
+
         while True:
 
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(3)
+            page.evaluate("""
+            window.scrollTo(0, document.body.scrollHeight);
+            document.querySelector("article").scrollIntoView();
+            """)
+
+            time.sleep(4)
 
             links = page.evaluate("""
-                Array.from(document.querySelectorAll("article a"))
+                Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
                     .map(a => a.href)
             """)
 
             posts = set()
 
             for link in links:
-                if "/p/" in link or "/reel/" in link:
-                    posts.add(link.split("?")[0])
+                posts.add(link.split("?")[0])
 
             print("Posts loaded:", len(posts))
 
@@ -101,8 +107,7 @@ def fetch_profile(username):
 
             last_count = len(posts)
 
-            # stop after scrolling without new posts twice
-            if same_count >= 2:
+            if same_count >= 3:
                 break
         posts_list = []
 
