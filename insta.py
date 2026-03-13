@@ -229,4 +229,4 @@ def callback_handler(call):
 
 print("Bot started")
 
-bot.infinity_polling()
+bot.infinity_polling(threaded=False)
