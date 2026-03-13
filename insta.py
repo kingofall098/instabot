@@ -44,46 +44,67 @@ page = browser.new_page()
 # =========================
 # FETCH PROFILE
 # =========================
+import requests
+import json
 
 def fetch_profile(username):
 
     try:
 
-        delay = random.uniform(5,8)
+        delay = random.uniform(4,7)
         print("Delay:", delay)
         time.sleep(delay)
 
-        url = f"https://www.instagram.com/{username}/"
-        print("Opening:", url)
+        # ----------------------------
+        # STEP 1: GET USER ID
+        # ----------------------------
 
-        page.goto(url, wait_until="domcontentloaded")
+        url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}"
 
-        page.wait_for_timeout(4000)
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-        print("Page title:", page.title())
-        print("Current URL:", page.url)
+        r = requests.get(url, headers=headers)
 
-        if "accounts/login" in page.url:
-            print("Instagram requires login session")
+        if r.status_code != 200:
+            print("User lookup failed:", r.status_code)
             return None
 
+        data = r.json()
 
-        # =========================
-        # GET HTML
-        # =========================
+        user_id = data["data"]["user"]["id"]
 
-        html = page.content()
+        print("User ID:", user_id)
 
-        match = re.search(r'window\._sharedData = (.*?);</script>', html)
 
-        if not match:
-            print("SharedData not found")
+        # ----------------------------
+        # STEP 2: GET POSTS
+        # ----------------------------
+
+        query_hash = "003056d32c2554def87228bc3fd9668a"
+
+        variables = {
+            "id": user_id,
+            "first": 50
+        }
+
+        graphql_url = "https://www.instagram.com/graphql/query/"
+
+        params = {
+            "query_hash": query_hash,
+            "variables": json.dumps(variables)
+        }
+
+        r = requests.get(graphql_url, headers=headers, params=params)
+
+        if r.status_code != 200:
+            print("GraphQL failed:", r.status_code)
             return None
 
+        data = r.json()
 
-        data = json.loads(match.group(1))
-
-        edges = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
+        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
         posts = []
 
@@ -101,13 +122,10 @@ def fetch_profile(username):
 
         return {"edges": posts}
 
-
     except Exception as e:
 
         print("FETCH ERROR:", e)
         return None
-
-
 # =========================
 # START COMMAND
 # =========================
