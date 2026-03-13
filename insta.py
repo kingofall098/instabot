@@ -43,6 +43,7 @@ page = browser.new_page()
 # =========================
 # FETCH PROFILE
 # =========================
+
 def fetch_profile(username):
 
     try:
@@ -55,25 +56,24 @@ def fetch_profile(username):
         print("Opening:", url)
 
         page.goto(url)
-
-        # wait for posts grid
+        # wait for first posts
+        
+        # page.wait_for_timeout(5000)
         page.wait_for_selector("article", timeout=15000)
 
-        # scroll inside the page to trigger lazy loading
-        for i in range(10):
+        # scroll to load more posts
+        for i in range(8):
 
             print("Scrolling page...", i+1)
 
-            page.evaluate("""
-                window.scrollTo(0, document.body.scrollHeight);
-            """)
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
-            time.sleep(2)
+            time.sleep(3)
 
-        # collect links directly from DOM
+        # collect all anchor links from page
         links = page.evaluate("""
-        Array.from(document.querySelectorAll("article a"))
-            .map(a => a.href)
+        Array.from(document.querySelectorAll("a"))
+        .map(a => a.href)
         """)
 
         posts = []
@@ -102,12 +102,38 @@ def fetch_profile(username):
             print("No posts detected")
             return None
 
+        elements = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
+
+        print("Elements found:", len(elements))
+
+        posts = []
+
+        for el in elements[:20]:
+
+            href = el.get_attribute("href")
+
+            if not href:
+                continue
+
+            link = "https://www.instagram.com" + href.split("?")[0]
+
+            posts.append({
+                "node": {
+                    "is_video": False,
+                    "display_url": link
+                }
+            })
+
+        if not posts:
+            print("No posts detected from DOM")
+            return None
+
         return {"edges": posts}
 
     except Exception as e:
 
         print("FETCH ERROR:", e)
-        return None
+        return None        
 # =========================
 # START COMMAND
 # =========================
