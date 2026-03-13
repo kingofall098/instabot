@@ -37,7 +37,7 @@ play = sync_playwright().start()
 
 browser = play.chromium.launch_persistent_context(
     user_data_dir="./ig_session",
-    headless=True,
+    headless=False,
     args=[
         "--disable-blink-features=AutomationControlled",
         "--no-sandbox"
