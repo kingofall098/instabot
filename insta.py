@@ -79,51 +79,72 @@ def fetch_profile(username):
 
     with sync_playwright() as p:
 
-        browser = p.chromium.launch(headless=True)
+        try:
 
-        context = browser.new_context()
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
 
-        page = context.new_page()
+            delay = random.uniform(5,8)
+            print("Delay:", delay)
+            time.sleep(delay)
 
-        delay = random.uniform(5,8)
-        print("Delay:", delay)
-        time.sleep(delay)
+            url = f"https://www.instagram.com/{username}/"
+            print("Opening:", url)
 
-        page.goto(f"https://www.instagram.com/{username}/")
+            page.goto(url)
 
-        page.wait_for_timeout(5000)
+            # wait for page
+            page.wait_for_timeout(5000)
 
-        # =========================
-        # PUT YOUR CODE HERE
-        # =========================
+            print("Page title:", page.title())
+            print("Current URL:", page.url)
 
-        html = page.content()
+            html = page.content()
 
-        links = re.findall(r'href="/(p|reel)/([^/]+)/"', html)
+            print("HTML length:", len(html))
 
-        posts = []
+            # detect login wall
+            if "login" in page.url.lower():
+                print("Instagram redirected to login page")
+                browser.close()
+                return None
 
-        for post_type, code in links[:20]:
+            # extract links
+            links = re.findall(r'href="/(p|reel)/([^/]+)/"', html)
 
-            if post_type == "reel":
-                url = f"https://www.instagram.com/reel/{code}/"
-            else:
-                url = f"https://www.instagram.com/p/{code}/"
+            print("Links found:", len(links))
 
-            posts.append({
-                "node": {
-                    "is_video": False,
-                    "display_url": url
-                }
-            })
+            posts = []
 
-        browser.close()
+            for post_type, code in links:
 
-        if not posts:
-            print("No posts found")
+                if post_type == "reel":
+                    media_url = f"https://www.instagram.com/reel/{code}/"
+                else:
+                    media_url = f"https://www.instagram.com/p/{code}/"
+
+                posts.append({
+                    "node": {
+                        "is_video": False,
+                        "display_url": media_url
+                    }
+                })
+
+            browser.close()
+
+            if not posts:
+                print("No posts detected in HTML")
+                print("First 500 chars of HTML:")
+                print(html[:500])
+                return None
+
+            return {"edges": posts[:20]}
+
+        except Exception as e:
+
+            print("ERROR inside fetch_profile:", str(e))
             return None
-
-        return {"edges": posts}
 # ==========================
 # START COMMAND
 # ==========================
