@@ -2,5 +2,6 @@ pyTelegramBotAPI
 psycopg2-binary
 instaloader
 requests
-playwright
-playwright 
+flask==3.0.2
+requests==2.31.0
+playwright==1.42.0
