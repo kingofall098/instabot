@@ -1,188 +1,140 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import requests
+
+from playwright.sync_api import sync_playwright
+
 import time
 import random
 import re
 
-# ==========================
-# BOT CONFIG
-# ==========================
+
+# =========================
+# BOT TOKEN
+# =========================
 
 TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
 
 bot = telebot.TeleBot(TOKEN)
 
+
+# =========================
+# CACHE
+# =========================
+
 post_cache = {}
-user_last_request = {}
-
-COOLDOWN = 10
 
 
-# ==========================
-# SESSION
-# ==========================
+# =========================
+# PLAYWRIGHT BROWSER
+# =========================
 
-session = requests.Session()
+print("Starting browser...")
 
-session.headers.update({
-    "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "en-US,en;q=0.9"
-})
+play = sync_playwright().start()
 
-session.cookies.set("sessionid", "80484585414%3AD73TCLEIfkcHlo%3A18%3AAYiBvd2rYoe1v3CB-H7jy6iJxtU7kZMyoQsjFLOGBg")
+browser = play.chromium.launch_persistent_context(
+    user_data_dir="./ig_profile",   # keeps login session
+    headless=True
+)
 
-# ==========================
-# NETWORK CHECK
-# ==========================
-
-def internet_available():
-
-    try:
-        requests.get("https://api.ipify.org", timeout=5)
-        return True
-    except:
-        return False
+page = browser.new_page()
 
 
-# ==========================
-# USERNAME EXTRACTION
-# ==========================
-
-def extract_username(text):
-
-    text = text.strip()
-
-    match = re.search(r"instagram\.com/([A-Za-z0-9_.]+)", text)
-
-    if match:
-        return match.group(1)
-
-    return text
-
-
-# ==========================
-# FETCH INSTAGRAM PROFILE
-# ==========================
-
-
-from playwright.sync_api import sync_playwright
-
-
+# =========================
+# FETCH PROFILE
+# =========================
 
 def fetch_profile(username):
 
-    from playwright.sync_api import sync_playwright
-    import re
-    import random
-    import time
+    try:
 
-    with sync_playwright() as p:
+        delay = random.uniform(5,8)
+        print("Delay:", delay)
 
-        try:
+        time.sleep(delay)
 
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
+        url = f"https://www.instagram.com/{username}/"
 
-            context.add_cookies([
-                {
-                    "name": "sessionid",
-                    "value": "80400887510%3AdCUmCn1fhOV9ge%3A19%3AAYijmO-c0tBG32UWtbQmWC2A023iF_nh_wL3qMYkdg",
-                    "domain": ".instagram.com",
-                    "path": "/",
-                    "httpOnly": True,
-                    "secure": True
+        print("Opening:", url)
+
+        page.goto(url)
+
+        page.wait_for_timeout(5000)
+
+        print("Page title:", page.title())
+        print("Current URL:", page.url)
+
+        html = page.content()
+
+        print("HTML length:", len(html))
+
+        links = re.findall(r'href="/(p|reel)/([^/]+)/"', html)
+
+        print("Links found:", len(links))
+
+        posts = []
+
+        for post_type, code in links:
+
+            if post_type == "reel":
+                media_url = f"https://www.instagram.com/reel/{code}/"
+            else:
+                media_url = f"https://www.instagram.com/p/{code}/"
+
+            posts.append({
+                "node": {
+                    "is_video": False,
+                    "display_url": media_url
                 }
-            ])
-            page = context.new_page()
+            })
 
-            delay = random.uniform(5,8)
-            print("Delay:", delay)
-            time.sleep(delay)
+        if not posts:
 
-            url = f"https://www.instagram.com/{username}/"
-            print("Opening:", url)
+            print("No posts detected in HTML")
+            print("First 500 chars of HTML:")
+            print(html[:500])
 
-            page.goto(url)
-
-            # wait for page
-            page.wait_for_timeout(5000)
-
-            print("Page title:", page.title())
-            print("Current URL:", page.url)
-
-            html = page.content()
-
-            print("HTML length:", len(html))
-
-            # detect login wall
-            if "login" in page.url.lower():
-                print("Instagram redirected to login page")
-                browser.close()
-                return None
-
-            # extract links
-            links = re.findall(r'href="/(p|reel)/([^/]+)/"', html)
-
-            print("Links found:", len(links))
-
-            posts = []
-
-            for post_type, code in links:
-
-                if post_type == "reel":
-                    media_url = f"https://www.instagram.com/reel/{code}/"
-                else:
-                    media_url = f"https://www.instagram.com/p/{code}/"
-
-                posts.append({
-                    "node": {
-                        "is_video": False,
-                        "display_url": media_url
-                    }
-                })
-
-            browser.close()
-
-            if not posts:
-                print("No posts detected in HTML")
-                print("First 500 chars of HTML:")
-                print(html[:500])
-                return None
-
-            return {"edges": posts[:20]}
-
-        except Exception as e:
-
-            print("ERROR inside fetch_profile:", str(e))
             return None
-# ==========================
-# START COMMAND
-# ==========================
 
-@bot.message_handler(commands=['start'])
+        return {"edges": posts[:50]}
+
+    except Exception as e:
+
+        print("ERROR:", e)
+        return None
+
+
+# =========================
+# START COMMAND
+# =========================
+
+@bot.message_handler(commands=["start"])
 def start(message):
 
     bot.send_message(
         message.chat.id,
-        "📸 Instagram Downloader\n\nSend username or profile link."
+        "Send Instagram username"
     )
 
 
-# ==========================
-# PROFILE HANDLER
-# ==========================
+# =========================
+# USERNAME HANDLER
+# =========================
 
 @bot.message_handler(func=lambda m: True)
 def profile_handler(message):
 
-    username = extract_username(message.text)
+    username = message.text.strip()
 
     data = fetch_profile(username)
 
     if not data:
 
-        bot.send_message(message.chat.id, "❌ Profile not found or network error.")
+        bot.send_message(
+            message.chat.id,
+            "❌ Could not fetch profile posts"
+        )
+
         return
 
     edges = data["edges"]
@@ -200,37 +152,17 @@ def profile_handler(message):
 
     bot.send_message(
         message.chat.id,
-        f"Found {len(edges)} posts.",
+        f"Found {len(edges)} posts",
         reply_markup=markup
     )
 
 
-# ==========================
+# =========================
 # BUTTON HANDLER
-# ==========================
+# =========================
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-
-    user_id = call.from_user.id
-    now = time.time()
-
-    if user_id in user_last_request:
-
-        elapsed = now - user_last_request[user_id]
-
-        if elapsed < COOLDOWN:
-
-            wait = int(COOLDOWN - elapsed)
-
-            bot.answer_callback_query(
-                call.id,
-                f"Please wait {wait} seconds",
-                show_alert=True
-            )
-            return
-
-    user_last_request[user_id] = now
 
     action, username, start = call.data.split("|")
 
@@ -240,7 +172,11 @@ def callback_handler(call):
 
     if not edges:
 
-        bot.send_message(call.message.chat.id, "Cache expired. Send username again.")
+        bot.send_message(
+            call.message.chat.id,
+            "Cache expired. Send username again."
+        )
+
         return
 
     posts = edges[start:start+10]
@@ -249,18 +185,10 @@ def callback_handler(call):
 
         node = post["node"]
 
-        if node["is_video"]:
-
-            bot.send_video(call.message.chat.id, node["video_url"])
-
-        else:
-
-            bot.send_photo(call.message.chat.id, node["display_url"])
-
-
-# ==========================
-# PAGINATION
-# ==========================
+        bot.send_message(
+            call.message.chat.id,
+            node["display_url"]
+        )
 
     next_start = start + 10
 
@@ -281,17 +209,11 @@ def callback_handler(call):
             reply_markup=markup
         )
 
-    else:
 
-        bot.send_message(call.message.chat.id, "✅ No more posts.")
-
-
-# ==========================
+# =========================
 # RUN BOT
-# ==========================
+# =========================
 
-bot.remove_webhook()
+print("Bot started")
 
-time.sleep(1)
-
-bot.infinity_polling(timeout=30, long_polling_timeout=30)
+bot.infinity_polling()
