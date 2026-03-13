@@ -14,7 +14,7 @@ import re
 
 TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
 
 # =========================
@@ -229,4 +229,4 @@ def callback_handler(call):
 
 print("Bot started")
 
-bot.infinity_polling(threaded=False)
+bot.infinity_polling()
