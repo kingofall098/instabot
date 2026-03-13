@@ -50,19 +50,33 @@ def fetch_profile(username):
 
         delay = random.uniform(5,8)
         print("Delay:", delay)
-
         time.sleep(delay)
 
         url = f"https://www.instagram.com/{username}/"
-
         print("Opening:", url)
 
         page.goto(url)
 
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(6000)
 
         print("Page title:", page.title())
         print("Current URL:", page.url)
+
+        # detect login page
+        if "login" in page.url:
+            print("Instagram login wall detected")
+            return None
+
+        # detect suspended
+        if "suspended" in page.url:
+            print("Instagram account/session suspended")
+            return None
+
+        # wait for posts to appear
+        try:
+            page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=8000)
+        except:
+            print("Post selector not found")
 
         html = page.content()
 
@@ -71,6 +85,12 @@ def fetch_profile(username):
         links = re.findall(r'href="/(p|reel)/([^/]+)/"', html)
 
         print("Links found:", len(links))
+
+        if len(links) == 0:
+            print("No post links detected")
+            print("First 500 chars of HTML:")
+            print(html[:500])
+            return None
 
         posts = []
 
@@ -88,22 +108,15 @@ def fetch_profile(username):
                 }
             })
 
-        if not posts:
-
-            print("No posts detected in HTML")
-            print("First 500 chars of HTML:")
-            print(html[:500])
-
-            return None
+        print("Posts collected:", len(posts))
 
         return {"edges": posts[:50]}
 
     except Exception as e:
 
-        print("ERROR:", e)
+        print("FETCH ERROR:", e)
         return None
-
-
+        
 # =========================
 # START COMMAND
 # =========================
