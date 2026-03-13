@@ -1,126 +1,162 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-from playwright.sync_api import sync_playwright
-
+import requests
 import time
 import random
 import re
 
-
-# =========================
+# =============================
 # BOT TOKEN
-# =========================
+# =============================
 
 TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
 
-bot = telebot.TeleBot(TOKEN, threaded=False)
+bot = telebot.TeleBot(TOKEN)
 
-
-# =========================
+# =============================
 # CACHE
-# =========================
+# =============================
 
 post_cache = {}
 
+# =============================
+# REQUEST SETTINGS
+# =============================
 
-# =========================
-# PLAYWRIGHT BROWSER
-# =========================
+HEADERS = {
+    "User-Agent": "Instagram 219.0.0.12.117 Android",
+    "x-ig-app-id": "936619743392459"
+}
 
-print("Starting browser...")
+# optional proxy
+PROXY = None
+# example
+# PROXY = {
+#     "http": "http://user:pass@host:port",
+#     "https": "http://user:pass@host:port"
+# }
 
-play = sync_playwright().start()
+# =============================
+# RANDOM DELAY
+# =============================
 
-browser = play.chromium.launch_persistent_context(
-    user_data_dir="./ig_profile",   # keeps login session
-    headless=True
-)
+def delay():
 
-page = browser.new_page()
+    d = random.uniform(3,6)
 
+    print("Delay:", d)
 
-# =========================
+    time.sleep(d)
+
+# =============================
+# EXTRACT USERNAME
+# =============================
+
+def extract_username(text):
+
+    text = text.strip()
+
+    match = re.search(r"instagram.com/([A-Za-z0-9_.]+)", text)
+
+    if match:
+        return match.group(1)
+
+    return text
+
+# =============================
 # FETCH PROFILE
-# =========================
+# =============================
 
 def fetch_profile(username):
 
+    delay()
+
+    url = "https://i.instagram.com/api/v1/users/web_profile_info/"
+
+    params = {
+        "username": username
+    }
+
     try:
 
-        delay = random.uniform(5,8)
-        print("Delay:", delay)
-        time.sleep(delay)
+        r = requests.get(
+            url,
+            headers=HEADERS,
+            params=params,
+            proxies=PROXY,
+            timeout=15
+        )
 
-        url = f"https://www.instagram.com/{username}/"
-        print("Opening:", url)
+        print("Status:", r.status_code)
 
-        page.goto(url)
-
-        page.wait_for_timeout(5000)
-
-        print("Page title:", page.title())
-        print("Current URL:", page.url)
-
-        # ----------------------------
-        # PUT THE NEW CODE HERE
-        # ----------------------------
-
-        page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=15000)
-
-        elements = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
-
-        print("Elements found:", len(elements))
-
-        posts = []
-
-        for el in elements[:20]:
-
-            href = el.get_attribute("href")
-
-            if not href:
-                continue
-
-            link = "https://www.instagram.com" + href.split("?")[0]
-
-            posts.append({
-                "node": {
-                    "is_video": False,
-                    "display_url": link
-                }
-            })
-
-        if not posts:
-            print("No posts detected from DOM")
+        if r.status_code != 200:
             return None
 
-        return {"edges": posts}
+        return r.json()
 
     except Exception as e:
 
-        print("FETCH ERROR:", e)
-        return None        
-# =========================
+        print("Request error:", e)
+
+        return None
+
+# =============================
+# PARSE POSTS
+# =============================
+
+def extract_posts(data):
+
+    try:
+
+        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
+
+        posts = []
+
+        for e in edges:
+
+            node = e["node"]
+
+            if node["is_video"]:
+
+                posts.append({
+                    "type": "video",
+                    "url": node.get("video_url"),
+                    "thumb": node.get("display_url")
+                })
+
+            else:
+
+                posts.append({
+                    "type": "photo",
+                    "url": node.get("display_url")
+                })
+
+        return posts
+
+    except:
+
+        return []
+
+# =============================
 # START COMMAND
-# =========================
+# =============================
 
 @bot.message_handler(commands=["start"])
 def start(message):
 
     bot.send_message(
         message.chat.id,
-        "Send Instagram username"
+        "Instagram Media Bot\n\nSend Instagram username"
     )
 
-
-# =========================
+# =============================
 # USERNAME HANDLER
-# =========================
+# =============================
 
 @bot.message_handler(func=lambda m: True)
 def profile_handler(message):
 
-    username = message.text.strip()
+    username = extract_username(message.text)
 
     data = fetch_profile(username)
 
@@ -128,14 +164,37 @@ def profile_handler(message):
 
         bot.send_message(
             message.chat.id,
-            "❌ Could not fetch profile posts"
+            "Could not fetch profile"
         )
 
         return
 
-    edges = data["edges"]
+    user = data["data"]["user"]
 
-    post_cache[username] = edges
+    followers = user["edge_followed_by"]["count"]
+    following = user["edge_follow"]["count"]
+    posts = user["edge_owner_to_timeline_media"]["count"]
+    profile_pic = user["profile_pic_url_hd"]
+
+    text = f"""
+Instagram Profile
+
+Username: {username}
+
+Followers: {followers}
+Following: {following}
+Posts: {posts}
+"""
+
+    extracted = extract_posts(data)
+
+    if not extracted:
+
+        bot.send_message(message.chat.id, "No posts found")
+
+        return
+
+    post_cache[username] = extracted
 
     markup = InlineKeyboardMarkup()
 
@@ -146,16 +205,16 @@ def profile_handler(message):
 
     markup.add(btn)
 
-    bot.send_message(
+    bot.send_photo(
         message.chat.id,
-        f"Found {len(edges)} posts",
+        profile_pic,
+        caption=text,
         reply_markup=markup
     )
 
-
-# =========================
+# =============================
 # BUTTON HANDLER
-# =========================
+# =============================
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -164,9 +223,7 @@ def callback_handler(call):
 
     start = int(start)
 
-    edges = post_cache.get(username)
-
-    if not edges:
+    if username not in post_cache:
 
         bot.send_message(
             call.message.chat.id,
@@ -175,20 +232,40 @@ def callback_handler(call):
 
         return
 
-    posts = edges[start:start+10]
+    posts = post_cache[username]
 
-    for post in posts:
+    selected = posts[start:start+10]
 
-        node = post["node"]
+    for post in selected:
 
-        bot.send_message(
-            call.message.chat.id,
-            node["display_url"]
-        )
+        delay()
+
+        try:
+
+            if post["type"] == "video":
+
+                bot.send_video(
+                    call.message.chat.id,
+                    post["url"]
+                )
+
+            else:
+
+                bot.send_photo(
+                    call.message.chat.id,
+                    post["url"]
+                )
+
+        except:
+
+            bot.send_message(
+                call.message.chat.id,
+                "Failed to send media"
+            )
 
     next_start = start + 10
 
-    if next_start < len(edges):
+    if next_start < len(posts):
 
         markup = InlineKeyboardMarkup()
 
@@ -205,10 +282,9 @@ def callback_handler(call):
             reply_markup=markup
         )
 
-
-# =========================
-# RUN BOT
-# =========================
+# =============================
+# START BOT
+# =============================
 
 print("Bot started")
 
