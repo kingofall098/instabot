@@ -56,17 +56,31 @@ def fetch_profile(username):
         print("Opening:", url)
 
         page.goto(url)
-
-        page.wait_for_timeout(5000)
-
-        print("Page title:", page.title())
-        print("Current URL:", page.url)
-
-        # ----------------------------
-        # PUT THE NEW CODE HERE
-        # ----------------------------
-
         page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=15000)
+
+        # Scroll to load more posts
+        for i in range(4):
+
+            print("Scrolling page...", i+1)
+            print("Page title:", page.title())
+            print("Current URL:", page.url)
+            page.mouse.wheel(0, 4000)
+
+            time.sleep(2)
+
+        elements = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
+
+        print("Total posts detected:", len(elements))
+        # page.wait_for_timeout(5000)
+
+        # print("Page title:", page.title())
+        # print("Current URL:", page.url)
+
+        # # ----------------------------
+        # # PUT THE NEW CODE HERE
+        # # ----------------------------
+
+        # page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=15000)
 
         elements = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
 
