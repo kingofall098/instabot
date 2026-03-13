@@ -48,6 +48,8 @@ page = browser.new_page()
 
 import requests
 import json
+import random
+import time
 
 def fetch_profile(username):
 
@@ -57,12 +59,13 @@ def fetch_profile(username):
         print("Delay:", delay)
         time.sleep(delay)
 
-        url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+        url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
 
         headers = {
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             "Accept": "*/*",
-            "X-Requested-With": "XMLHttpRequest"
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-IG-App-ID": "936619743392459"
         }
 
         r = requests.get(url, headers=headers)
@@ -74,7 +77,7 @@ def fetch_profile(username):
 
         data = r.json()
 
-        edges = data["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
+        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
         posts = []
 
