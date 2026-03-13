@@ -1,6 +1,6 @@
-# =====================================
+# ==========================================
 # IMPORT LIBRARIES
-# =====================================
+# ==========================================
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,9 +10,9 @@ import time
 import re
 
 
-# =====================================
+# ==========================================
 # BOT CONFIG
-# =====================================
+# ==========================================
 
 TOKEN = "8780791852:AAHqVZYRVc7QEyzCNxzAqIdfDCZuoMPZtYY"
 
@@ -25,35 +25,73 @@ user_last_request = {}
 COOLDOWN = 10
 
 
-# =====================================
-# REQUEST SESSION (BROWSER-LIKE)
-# =====================================
+# ==========================================
+# REQUEST SESSION
+# ==========================================
 
 session = requests.Session()
 
 session.headers.update({
     "User-Agent": "Mozilla/5.0",
-    "X-IG-App-ID": "936619743392459",
-    "Accept-Language": "en-US,en;q=0.9"
+    "X-IG-App-ID": "936619743392459"
 })
 
 
-# =====================================
-# PROXY CONFIG (STICKY RESIDENTIAL)
-# =====================================
+# ==========================================
+# GET FREE PROXIES FROM GEONODE
+# ==========================================
+
+def fetch_proxies():
+
+    url = "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc"
+
+    try:
+
+        r = requests.get(url, timeout=15)
+
+        data = r.json()
+
+        proxies = []
+
+        for proxy in data["data"]:
+
+            ip = proxy["ip"]
+            port = proxy["port"]
+
+            proxies.append(f"http://{ip}:{port}")
+
+        return proxies
+
+    except:
+
+        return []
+
+
+proxy_list = fetch_proxies()
+
+
+# ==========================================
+# GET RANDOM PROXY
+# ==========================================
 
 def get_proxy():
 
-    proxy = "http://ufvsfnff:y54tcfrt0eou@ipv4.webshare.io:6754"
+    global proxy_list
+
+    if not proxy_list:
+        proxy_list = fetch_proxies()
+
+    proxy = random.choice(proxy_list)
 
     return {
         "http": proxy,
         "https": proxy
     }
 
-# =====================================
+
+# ==========================================
 # USERNAME EXTRACTION
-# =====================================
+# ==========================================
 
 def extract_username(text):
 
@@ -67,17 +105,17 @@ def extract_username(text):
     return text
 
 
-# =====================================
-# FETCH PROFILE DATA
-# =====================================
+# ==========================================
+# FETCH INSTAGRAM PROFILE
+# ==========================================
 
 def fetch_profile(username):
 
     url = "https://i.instagram.com/api/v1/users/web_profile_info/"
 
-    params = {"username": username}
+    params = {"username": username.lower()}
 
-    for attempt in range(5):
+    for attempt in range(10):
 
         proxy = get_proxy()
 
@@ -96,6 +134,7 @@ def fetch_profile(username):
                 timeout=15
             )
 
+            print("Proxy used:", proxy)
             print("Status:", r.status_code)
 
             if r.status_code == 200:
@@ -106,27 +145,27 @@ def fetch_profile(username):
 
         except Exception as e:
 
-            print("Request failed:", e)
+            print("Proxy failed:", e)
 
     return None
 
 
-# =====================================
+# ==========================================
 # START COMMAND
-# =====================================
+# ==========================================
 
 @bot.message_handler(commands=['start'])
 def start(message):
 
     bot.send_message(
         message.chat.id,
-        "📸 Instagram Downloader\n\nSend an Instagram username or profile link."
+        "📸 Instagram Downloader Bot\n\nSend an Instagram username or profile link."
     )
 
 
-# =====================================
+# ==========================================
 # PROFILE HANDLER
-# =====================================
+# ==========================================
 
 @bot.message_handler(func=lambda m: True)
 def profile_handler(message):
@@ -137,7 +176,7 @@ def profile_handler(message):
 
     if not data:
 
-        bot.send_message(message.chat.id, "❌ Profile not found")
+        bot.send_message(message.chat.id, "❌ Profile not found or proxies failed.")
         return
 
     edges = data["edges"]
@@ -160,15 +199,14 @@ def profile_handler(message):
     )
 
 
-# =====================================
+# ==========================================
 # BUTTON HANDLER
-# =====================================
+# ==========================================
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
 
     user_id = call.from_user.id
-
     now = time.time()
 
     if user_id in user_last_request:
@@ -222,9 +260,9 @@ def callback_handler(call):
             )
 
 
-# =====================================
+# ==========================================
 # NEXT PAGE BUTTON
-# =====================================
+# ==========================================
 
     next_start = start + 10
 
@@ -251,20 +289,11 @@ def callback_handler(call):
             call.message.chat.id,
             "✅ No more posts."
         )
-import requests
 
-proxy = {
-    "http": "http://USERNAME:PASSWORD@ipv4.webshare.io:6754",
-    "https": "http://USERNAME:PASSWORD@ipv4.webshare.io:6754"
-}
 
-r = requests.get("https://api.ipify.org", proxies=proxy)
-
-print("Proxy IP:", r.text)
-
-# =====================================
+# ==========================================
 # RUN BOT
-# =====================================
+# ==========================================
 
 bot.remove_webhook()
 
