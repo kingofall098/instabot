@@ -56,24 +56,22 @@ def fetch_profile(username):
         print("Opening:", url)
 
         page.goto(url)
-        # wait for first posts
-        
-        # page.wait_for_timeout(5000)
+
         page.wait_for_selector("article", timeout=15000)
 
-        # scroll to load more posts
-        for i in range(8):
+        # scroll page to load more posts
+        for i in range(10):
 
             print("Scrolling page...", i+1)
 
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
-            time.sleep(3)
+            time.sleep(2)
 
-        # collect all anchor links from page
+        # extract links from post grid
         links = page.evaluate("""
-        Array.from(document.querySelectorAll("a"))
-        .map(a => a.href)
+        Array.from(document.querySelectorAll("article a"))
+            .map(a => a.href)
         """)
 
         posts = []
@@ -99,33 +97,6 @@ def fetch_profile(username):
         print("Total posts detected:", len(posts))
 
         if not posts:
-            print("No posts detected")
-            return None
-
-        elements = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
-
-        print("Elements found:", len(elements))
-
-        posts = []
-
-        for el in elements[:20]:
-
-            href = el.get_attribute("href")
-
-            if not href:
-                continue
-
-            link = "https://www.instagram.com" + href.split("?")[0]
-
-            posts.append({
-                "node": {
-                    "is_video": False,
-                    "display_url": link
-                }
-            })
-
-        if not posts:
-            print("No posts detected from DOM")
             return None
 
         return {"edges": posts}
