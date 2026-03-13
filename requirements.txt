@@ -1,7 +1,6 @@
-pyTelegramBotAPI
-psycopg2-binary
-instaloader
-requests
+pyTelegramBotAPI==4.32.0
+psycopg2-binary==2.9.11
+instaloader==4.15
+requests==2.32.5
 flask==3.0.2
-requests==2.31.0
 playwright==1.42.0
