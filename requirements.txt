@@ -2,5 +2,5 @@ pyTelegramBotAPI
 psycopg2-binary
 instaloader
 requests
-pip install playwright
+playwright
 playwright install
