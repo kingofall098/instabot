@@ -83,6 +83,17 @@ def fetch_profile(username):
 
             browser = p.chromium.launch(headless=True)
             context = browser.new_context()
+
+            context.add_cookies([
+                {
+                    "name": "sessionid",
+                    "value": "80484585414%3AD73TCLEIfkcHlo%3A18%3AAYgFHiooPrlXGxU7ndzIutGt94Ou_OigLOo0LIstlA",
+                    "domain": ".instagram.com",
+                    "path": "/",
+                    "httpOnly": True,
+                    "secure": True
+                }
+            ])
             page = context.new_page()
 
             delay = random.uniform(5,8)
