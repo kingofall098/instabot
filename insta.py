@@ -57,10 +57,12 @@ def fetch_profile(username):
 
         page.goto(url)
         # wait for first posts
-        page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=15000)
+        
+        # page.wait_for_timeout(5000)
+        page.wait_for_selector("article", timeout=15000)
 
-        # scroll page to load more posts
-        for i in range(6):
+        # scroll to load more posts
+        for i in range(8):
 
             print("Scrolling page...", i+1)
 
@@ -68,11 +70,39 @@ def fetch_profile(username):
 
             time.sleep(3)
 
-        elements = page.query_selector_all('a[href*="/p/"], a[href*="/reel/"]')
+        # collect all anchor links from page
+        links = page.evaluate("""
+        Array.from(document.querySelectorAll("a"))
+        .map(a => a.href)
+        """)
 
-        print("Total posts detected:", len(elements))
-        # page.wait_for_timeout(5000)
+        posts = []
+        seen = set()
 
+        for link in links:
+
+            if "/p/" in link or "/reel/" in link:
+
+                link = link.split("?")[0]
+
+                if link in seen:
+                    continue
+
+                seen.add(link)
+
+                posts.append({
+                    "node": {
+                        "display_url": link
+                    }
+                })
+
+        print("Total posts detected:", len(posts))
+
+        if not posts:
+            print("No posts detected")
+            return None
+
+        return {"edges": posts}
         # print("Page title:", page.title())
         # print("Current URL:", page.url)
 
