@@ -55,9 +55,19 @@ def fetch_profile(username):
         url = f"https://www.instagram.com/{username}/"
         print("Opening:", url)
 
+        page.goto(url, wait_until="domcontentloaded")
         page.goto(url)
 
-        page.wait_for_selector("article", timeout=15000)
+        page.wait_for_timeout(4000)
+
+        print("Current URL:", page.url)
+
+        if "accounts/login" in page.url:
+            print("Instagram requires login session")
+            return None
+        print("Page title:", page.title())
+        print("Current URL:", page.url)
+        page.wait_for_selector("article", timeout=30000)
 
         # scroll page to load more posts
         for i in range(10):
