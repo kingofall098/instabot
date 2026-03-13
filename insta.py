@@ -5,10 +5,9 @@ import random
 import time
 import re
 
-
-# =========================================
+# =====================================
 # BOT CONFIG
-# =========================================
+# =====================================
 
 TOKEN = "8780791852:AAHqVZYRVc7QEyzCNxzAqIdfDCZuoMPZtYY"
 
@@ -16,30 +15,28 @@ bot = telebot.TeleBot(TOKEN)
 
 post_cache = {}
 user_last_request = {}
+
 COOLDOWN = 10
 
-
-# =========================================
+# =====================================
 # SESSION
-# =========================================
+# =====================================
 
 session = requests.Session()
 
 session.headers.update({
     "User-Agent": "Mozilla/5.0",
-    "X-IG-App-ID": "936619743392459"
+    "X-IG-App-ID": "936619743392459",
+    "Accept-Language": "en-US,en;q=0.9"
 })
 
-
-# =========================================
-# DOWNLOAD PROXY LIST
-# =========================================
+# =====================================
+# DOWNLOAD PROXIES
+# =====================================
 
 def fetch_proxies():
 
     url = "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc"
-
-    print("Downloading proxies...")
 
     try:
 
@@ -62,10 +59,9 @@ def fetch_proxies():
 
         return []
 
-
-# =========================================
+# =====================================
 # TEST PROXY
-# =========================================
+# =====================================
 
 def test_proxy(proxy):
 
@@ -85,10 +81,9 @@ def test_proxy(proxy):
 
     return False
 
-
-# =========================================
+# =====================================
 # BUILD WORKING PROXY POOL
-# =========================================
+# =====================================
 
 def build_proxy_pool():
 
@@ -111,19 +106,18 @@ def build_proxy_pool():
 
     return working
 
-
 proxy_list = build_proxy_pool()
 
-
-# =========================================
+# =====================================
 # GET RANDOM PROXY
-# =========================================
+# =====================================
 
 def get_proxy():
 
     global proxy_list
 
     if not proxy_list:
+
         proxy_list = build_proxy_pool()
 
     proxy = random.choice(proxy_list)
@@ -133,10 +127,9 @@ def get_proxy():
         "https": proxy
     }
 
-
-# =========================================
-# EXTRACT USERNAME
-# =========================================
+# =====================================
+# USERNAME EXTRACTION
+# =====================================
 
 def extract_username(text):
 
@@ -149,10 +142,9 @@ def extract_username(text):
 
     return text
 
-
-# =========================================
+# =====================================
 # FETCH INSTAGRAM PROFILE
-# =========================================
+# =====================================
 
 def fetch_profile(username):
 
@@ -160,14 +152,15 @@ def fetch_profile(username):
 
     params = {"username": username.lower()}
 
-    for attempt in range(10):
+    # ---- TRY WITH PROXIES ----
+
+    for attempt in range(8):
 
         proxy = get_proxy()
 
         try:
 
             delay = random.uniform(2,5)
-
             print("Delay:", delay)
 
             time.sleep(delay)
@@ -179,7 +172,7 @@ def fetch_profile(username):
                 timeout=15
             )
 
-            print("Proxy:", proxy)
+            print("Proxy used:", proxy)
             print("Status:", r.status_code)
 
             if r.status_code == 200:
@@ -192,25 +185,45 @@ def fetch_profile(username):
 
             print("Proxy failed:", e)
 
+    # ---- FALLBACK WITHOUT PROXY ----
+
+    print("All proxies failed. Trying direct connection...")
+
+    try:
+
+        r = session.get(
+            url,
+            params=params,
+            timeout=15
+        )
+
+        if r.status_code == 200:
+
+            data = r.json()
+
+            return data["data"]["user"]["edge_owner_to_timeline_media"]
+
+    except Exception as e:
+
+        print("Direct request failed:", e)
+
     return None
 
-
-# =========================================
+# =====================================
 # START COMMAND
-# =========================================
+# =====================================
 
 @bot.message_handler(commands=['start'])
 def start(message):
 
     bot.send_message(
         message.chat.id,
-        "📸 Instagram Downloader\n\nSend username or profile link."
+        "📸 Instagram Downloader\n\nSend an Instagram username or profile link."
     )
 
-
-# =========================================
+# =====================================
 # PROFILE HANDLER
-# =========================================
+# =====================================
 
 @bot.message_handler(func=lambda m: True)
 def profile_handler(message):
@@ -221,7 +234,7 @@ def profile_handler(message):
 
     if not data:
 
-        bot.send_message(message.chat.id, "❌ Profile not found or proxies failed.")
+        bot.send_message(message.chat.id, "❌ Profile not found or connection failed.")
         return
 
     edges = data["edges"]
@@ -243,10 +256,9 @@ def profile_handler(message):
         reply_markup=markup
     )
 
-
-# =========================================
+# =====================================
 # BUTTON HANDLER
-# =========================================
+# =====================================
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -282,9 +294,7 @@ def callback_handler(call):
         bot.send_message(call.message.chat.id, "Cache expired. Send username again.")
         return
 
-
     posts = edges[start:start+10]
-
 
     for post in posts:
 
@@ -298,10 +308,9 @@ def callback_handler(call):
 
             bot.send_photo(call.message.chat.id, node["display_url"])
 
-
-# =========================================
-# NEXT PAGE BUTTON
-# =========================================
+# =====================================
+# NEXT BUTTON
+# =====================================
 
     next_start = start + 10
 
@@ -326,13 +335,15 @@ def callback_handler(call):
 
         bot.send_message(call.message.chat.id, "✅ No more posts.")
 
-
-# =========================================
+# =====================================
 # RUN BOT
-# =========================================
+# =====================================
 
 bot.remove_webhook()
 
 time.sleep(1)
 
-bot.infinity_polling(timeout=30, long_polling_timeout=30)
+bot.infinity_polling(
+    timeout=30,
+    long_polling_timeout=30
+)
