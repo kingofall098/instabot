@@ -12,7 +12,7 @@ import re
 # BOT TOKEN
 # =========================
 
-TOKEN = "PUT_YOUR_TOKEN_HERE"
+TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
