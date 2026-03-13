@@ -6,7 +6,6 @@ from playwright.sync_api import sync_playwright
 import time
 import random
 import re
-import json
 
 
 # =========================
@@ -34,7 +33,7 @@ print("Starting browser...")
 play = sync_playwright().start()
 
 browser = play.chromium.launch_persistent_context(
-    user_data_dir="./ig_profile",
+    user_data_dir="./ig_profile",   # keeps login session
     headless=True
 )
 
@@ -45,61 +44,83 @@ page = browser.new_page()
 # FETCH PROFILE
 # =========================
 
-
-import requests
-import json
-import random
-import time
-
 def fetch_profile(username):
 
     try:
 
-        delay = random.uniform(4,7)
+        delay = random.uniform(5,8)
         print("Delay:", delay)
         time.sleep(delay)
 
-        url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+        url = f"https://www.instagram.com/{username}/"
+        print("Opening:", url)
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "X-IG-App-ID": "936619743392459"
-        }
+        page.goto(url, wait_until="domcontentloaded")
 
-        r = requests.get(url, headers=headers)
+        page.wait_for_timeout(5000)
 
-        print("Status:", r.status_code)
+        print("Page title:", page.title())
+        print("Current URL:", page.url)
 
-        if r.status_code != 200:
+        if "login" in page.url:
+            print("Instagram redirected to login")
             return None
 
-        data = r.json()
+        # wait for posts
+        page.wait_for_selector("article", timeout=30000)
 
-        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
+        posts = set()
 
-        posts = []
+        last_count = 0
+        no_new_scroll = 0
 
-        for e in edges:
+        while True:
 
-            shortcode = e["node"]["shortcode"]
+            links = page.evaluate("""
+                Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
+                    .map(a => a.href)
+            """)
 
-            posts.append({
+            for link in links:
+                posts.add(link.split("?")[0])
+
+            print("Posts loaded:", len(posts))
+
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(3)
+
+            if len(posts) == last_count:
+                no_new_scroll += 1
+            else:
+                no_new_scroll = 0
+
+            last_count = len(posts)
+
+            if no_new_scroll >= 3:
+                break
+
+        posts_list = []
+
+        for link in posts:
+
+            posts_list.append({
                 "node": {
-                    "display_url": f"https://www.instagram.com/p/{shortcode}/"
+                    "display_url": link
                 }
             })
 
-        print("Total posts detected:", len(posts))
+        print("Total posts detected:", len(posts_list))
 
-        return {"edges": posts}
+        if not posts_list:
+            return None
+
+        return {"edges": posts_list}
 
     except Exception as e:
 
         print("FETCH ERROR:", e)
         return None
-        
+    
 # =========================
 # START COMMAND
 # =========================
@@ -130,13 +151,12 @@ def profile_handler(message):
             message.chat.id,
             "❌ Could not fetch profile posts"
         )
-        return
 
+        return
 
     edges = data["edges"]
 
     post_cache[username] = edges
-
 
     markup = InlineKeyboardMarkup()
 
@@ -146,7 +166,6 @@ def profile_handler(message):
     )
 
     markup.add(btn)
-
 
     bot.send_message(
         message.chat.id,
@@ -174,11 +193,10 @@ def callback_handler(call):
             call.message.chat.id,
             "Cache expired. Send username again."
         )
+
         return
 
-
     posts = edges[start:start+10]
-
 
     for post in posts:
 
@@ -189,9 +207,7 @@ def callback_handler(call):
             node["display_url"]
         )
 
-
     next_start = start + 10
-
 
     if next_start < len(edges):
 
