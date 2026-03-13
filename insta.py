@@ -56,106 +56,62 @@ def fetch_profile(username):
         print("Opening:", url)
 
         page.goto(url, wait_until="domcontentloaded")
-        page.goto(url)
 
         page.wait_for_timeout(4000)
 
+        print("Page title:", page.title())
         print("Current URL:", page.url)
 
         if "accounts/login" in page.url:
             print("Instagram requires login session")
             return None
+
+        page.goto(url, wait_until="domcontentloaded")
+
+        page.wait_for_timeout(4000)
+
         print("Page title:", page.title())
         print("Current URL:", page.url)
-        page.wait_for_selector("article", timeout=30000)
 
-        # scroll page to load more posts
-        # wait for first posts
-        page.wait_for_selector("article", timeout=30000)
+        if "accounts/login" in page.url:
+            print("Instagram requires login session")
+            return None
 
-        last_count = 0
-        same_count = 0
+        # ----------------------------
+        # EXTRACT POSTS FROM PAGE JSON
+        # ----------------------------
 
-        last_count = 0
-        same_count = 0
+        html = page.content()
 
-        while True:
+        match = re.search(r'window\._sharedData = (.*?);</script>', html)
 
-            page.evaluate("""
-            window.scrollTo(0, document.body.scrollHeight);
-            document.querySelector("article").scrollIntoView();
-            """)
+        if not match:
+            print("SharedData not found")
+            return None
 
-            time.sleep(4)
+        data = match.group(1)
 
-            links = page.evaluate("""
-                Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
-                    .map(a => a.href)
-            """)
+        import json
+        data = json.loads(data)
 
-            posts = set()
+        edges = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
-            for link in links:
-                posts.add(link.split("?")[0])
+        posts = []
 
-            print("Posts loaded:", len(posts))
+        for e in edges:
 
-            if len(posts) == last_count:
-                same_count += 1
-            else:
-                same_count = 0
+            shortcode = e["node"]["shortcode"]
 
-            last_count = len(posts)
-
-            if same_count >= 3:
-                break
-        posts_list = []
-
-        for link in posts:
-            posts_list.append({
+            posts.append({
                 "node": {
-                    "display_url": link
+                    "display_url": f"https://www.instagram.com/p/{shortcode}/"
                 }
             })
 
-        print("Total posts detected:", len(posts_list))
-
-        if not posts_list:
-            return None
-
-        return {"edges": posts_list}
-
-        posts = []
-        seen = set()
-
-        for link in links:
-
-            if "/p/" in link or "/reel/" in link:
-
-                link = link.split("?")[0]
-
-                if link in seen:
-                    continue
-
-                seen.add(link)
-
-                posts.append({
-                    "node": {
-                        "display_url": link
-                    }
-                })
-
         print("Total posts detected:", len(posts))
 
-        if not posts:
-            return None
-
         return {"edges": posts}
-
-    except Exception as e:
-
-        print("FETCH ERROR:", e)
-        return None        
+    
 # =========================
 # START COMMAND
 # =========================
