@@ -3,6 +3,9 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from playwright.sync_api import sync_playwright
 
+import requests
+from io import BytesIO
+
 import time
 import random
 import re
@@ -35,14 +38,11 @@ play = sync_playwright().start()
 browser = play.chromium.launch_persistent_context(
     user_data_dir="./ig_session",
     headless=True,
-
     args=[
         "--disable-blink-features=AutomationControlled",
         "--no-sandbox"
     ],
-
     viewport={"width":1280,"height":800},
-
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
 )
 
@@ -56,10 +56,10 @@ page = browser.new_page()
 def human_scroll():
 
     page.evaluate("""
-    window.scrollBy({
-        top: window.innerHeight,
-        behavior: 'smooth'
-    });
+        window.scrollBy({
+            top: window.innerHeight,
+            behavior: 'smooth'
+        });
     """)
 
     time.sleep(random.uniform(2,4))
@@ -78,7 +78,6 @@ def fetch_profile(username):
         time.sleep(delay)
 
         url = f"https://www.instagram.com/{username}/"
-
         print("Opening:", url)
 
         page.goto(url, wait_until="domcontentloaded")
@@ -89,7 +88,7 @@ def fetch_profile(username):
         print("Current URL:", page.url)
 
         if "login" in page.url:
-            print("Instagram login wall")
+            print("Instagram redirected to login")
             return None
 
         page.wait_for_selector("article", timeout=30000)
@@ -102,8 +101,8 @@ def fetch_profile(username):
         while True:
 
             links = page.evaluate("""
-            Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
-            .map(a => a.href)
+                Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
+                .map(a => a.href)
             """)
 
             for link in links:
@@ -169,9 +168,34 @@ def fetch_media(post_url):
         return None, None
 
     except Exception as e:
-
         print("Media fetch error:", e)
         return None, None
+
+
+# =========================
+# DOWNLOAD AND SEND MEDIA
+# =========================
+
+def send_media(chat_id, media_type, url):
+
+    try:
+
+        r = requests.get(url, timeout=20)
+
+        if r.status_code != 200:
+            print("Media download failed")
+            return
+
+        file = BytesIO(r.content)
+
+        if media_type == "photo":
+            bot.send_photo(chat_id, file)
+
+        elif media_type == "video":
+            bot.send_video(chat_id, file)
+
+    except Exception as e:
+        print("Send media error:", e)
 
 
 # =========================
@@ -204,7 +228,6 @@ def profile_handler(message):
             message.chat.id,
             "❌ Could not fetch profile posts"
         )
-
         return
 
     edges = data["edges"]
@@ -246,7 +269,6 @@ def callback_handler(call):
             call.message.chat.id,
             "Cache expired. Send username again."
         )
-
         return
 
     posts = edges[start:start+10]
@@ -259,13 +281,9 @@ def callback_handler(call):
 
         media_type, media_url = fetch_media(post_url)
 
-        if media_type == "video":
+        if media_type:
 
-            bot.send_video(call.message.chat.id, media_url)
-
-        elif media_type == "photo":
-
-            bot.send_photo(call.message.chat.id, media_url)
+            send_media(call.message.chat.id, media_type, media_url)
 
         else:
 
