@@ -4,7 +4,7 @@ import instaloader
 import time
 import random
 
-TOKEN = "8429656135:AAFZcHr-sKqcp5eBYsJWeP8YaSlvCeoyp2s"
+TOKEN = "8608796288:AAG9DfM_iVuA2fQLZExC1GU1akgbp_md8kM"
 bot = telebot.TeleBot(TOKEN)
 
 # -----------------------------
