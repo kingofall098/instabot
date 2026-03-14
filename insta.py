@@ -151,7 +151,9 @@ def scrape_background(username, job):
 # =========================
 def scrape_background(job):
 
-    print("Scraping:", job.username)
+    username = job.username
+
+    print("Scraping:", username)
 
     try:
 
@@ -160,7 +162,7 @@ def scrape_background(job):
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
 
-            url = f"https://www.instagram.com/{job.username}/"
+            url = f"https://www.instagram.com/{username}/"
 
             page.goto(url, wait_until="domcontentloaded")
 
@@ -185,8 +187,7 @@ def scrape_background(job):
 
     except Exception as e:
 
-        print("Scraper error:", e)
-        
+        print("Scraper error:", e)        
 def fetch_media(post_url):
 
     try:
@@ -246,7 +247,7 @@ def profile_handler(message):
 
     thread = threading.Thread(
         target=scrape_background,
-        args=(username, job)
+        args=(job,)
     )
 
     thread.start()
