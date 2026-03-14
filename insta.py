@@ -2,7 +2,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import re
 from playwright.sync_api import sync_playwright
-
+import threading
 import time
 import random
 
