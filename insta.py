@@ -1,6 +1,6 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
+import re
 from playwright.sync_api import sync_playwright
 
 import time
@@ -84,7 +84,7 @@ browser.add_cookies([
 # FETCH PROFILE
 # =========================
 
-def fetch_profile(username):
+def stream_posts(username, chat_id):
 
     try:
 
@@ -97,22 +97,11 @@ def fetch_profile(username):
 
         page.goto(url, wait_until="domcontentloaded")
 
-        page.wait_for_timeout(5000)
-
-        print("Page title:", page.title())
-        print("Current URL:", page.url)
-
-        if "login" in page.url:
-            print("Instagram redirected to login")
-            return None
-
-        # wait for posts
         page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
 
-        posts = set()
-
-        last_count = 0
+        sent_posts = set()
         no_new_scroll = 0
+        last_count = 0
 
         while True:
 
@@ -122,50 +111,59 @@ def fetch_profile(username):
             """)
 
             for link in links:
-                posts.add(link.split("?")[0])
 
-            print("Posts loaded:", len(posts))
+                link = link.split("?")[0]
+
+                if link in sent_posts:
+                    continue
+
+                sent_posts.add(link)
+
+                media_type, media_url = fetch_media(link)
+
+                try:
+
+                    if media_type == "video":
+                        bot.send_video(chat_id, media_url)
+
+                    elif media_type == "photo":
+                        bot.send_photo(chat_id, media_url)
+
+                    else:
+                        bot.send_message(chat_id, link)
+
+                except:
+                    bot.send_message(chat_id, link)
+
+                time.sleep(random.uniform(2,4))
+
+            print("Posts sent:", len(sent_posts))
 
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(3)
 
-            if len(posts) == last_count:
+            if len(sent_posts) == last_count:
                 no_new_scroll += 1
             else:
                 no_new_scroll = 0
 
-            last_count = len(posts)
+            last_count = len(sent_posts)
 
             if no_new_scroll >= 3:
                 break
 
-        posts_list = []
-
-        for link in posts:
-
-            posts_list.append({
-                "node": {
-                    "display_url": link
-                }
-            })
-
-        print("Total posts detected:", len(posts_list))
-
-        if not posts_list:
-            return None
-
-        return {"edges": posts_list}
+        bot.send_message(chat_id, f"Finished. {len(sent_posts)} posts sent.")
 
     except Exception as e:
 
-        print("FETCH ERROR:", e)
-        return None
+        print("STREAM ERROR:", e)
+        bot.send_message(chat_id, "Error scraping profile.")
 def fetch_media(post_url):
 
     try:
 
         page.goto(post_url, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2000)
 
         html = page.content()
 
@@ -181,9 +179,8 @@ def fetch_media(post_url):
         return None, None
 
     except Exception as e:
-        print("Media fetch error:", e)
+        print("Media error:", e)
         return None, None
-
 # =========================
 # START COMMAND
 # =========================
@@ -200,43 +197,17 @@ def start(message):
 # =========================
 # USERNAME HANDLER
 # =========================
-
 @bot.message_handler(func=lambda m: True)
 def profile_handler(message):
 
     username = message.text.strip()
 
-    data = fetch_profile(username)
-
-    if not data:
-
-        bot.send_message(
-            message.chat.id,
-            "❌ Could not fetch profile posts"
-        )
-
-        return
-
-    edges = data["edges"]
-
-    post_cache[username] = edges
-
-    markup = InlineKeyboardMarkup()
-
-    btn = InlineKeyboardButton(
-        "Download Posts",
-        callback_data=f"posts|{username}|0"
-    )
-
-    markup.add(btn)
-
     bot.send_message(
         message.chat.id,
-        f"Found {len(edges)} posts",
-        reply_markup=markup
+        f"Fetching posts from {username}..."
     )
 
-
+    stream_posts(username, message.chat.id)
 # =========================
 # BUTTON HANDLER
 # =========================
