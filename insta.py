@@ -294,25 +294,29 @@ def send_next(call):
         if media_url:
 
             try:
-
-                # clean url for telegram
                 media_url = media_url.replace("&amp;", "&")
+                media_url = media_url.replace(".heic", ".jpg")
+
+                headers = {
+                    "User-Agent": "Mozilla/5.0"
+                }
+
+                r = requests.get(media_url, headers=headers, timeout=20)
+
+                if r.status_code != 200:
+                    raise Exception("Download failed")
 
                 if media_type == "video":
-
-                    bot.send_video(call.message.chat.id, media_url)
+                    bot.send_video(call.message.chat.id, r.content)
 
                 elif media_type == "photo":
-
-                    # convert heic → jpg
-                    media_url = media_url.replace(".heic", ".jpg")
-
-                    bot.send_photo(call.message.chat.id, media_url)
+                    bot.send_photo(call.message.chat.id, r.content)
 
             except Exception as e:
 
                 log(f"Telegram error: {e}")
                 bot.send_message(call.message.chat.id, post_url)
+        
 
         else:
 
