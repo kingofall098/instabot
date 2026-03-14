@@ -294,8 +294,11 @@ def send_next(call):
         if media_url:
 
             try:
+
                 media_url = media_url.replace("&amp;", "&")
                 media_url = media_url.replace(".heic", ".jpg")
+
+                print("Final media URL:", media_url)
 
                 headers = {
                     "User-Agent": "Mozilla/5.0"
@@ -304,12 +307,14 @@ def send_next(call):
                 r = requests.get(media_url, headers=headers, timeout=20)
 
                 if r.status_code != 200:
-                    raise Exception("Download failed")
+                    raise Exception(f"Download failed {r.status_code}")
 
                 if media_type == "video":
+
                     bot.send_video(call.message.chat.id, r.content)
 
                 elif media_type == "photo":
+
                     bot.send_photo(call.message.chat.id, r.content)
 
             except Exception as e:
