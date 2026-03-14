@@ -138,10 +138,7 @@ def scrape_background(job):
 
         print("Scraper error:", e)        
 import requests
-
-import requests
 import re
-
 def fetch_media(post_url):
 
     try:
@@ -151,32 +148,26 @@ def fetch_media(post_url):
             "Accept-Language": "en-US,en;q=0.9"
         }
 
-        r = requests.get(post_url, headers=headers, timeout=15, allow_redirects=True)
+        r = requests.get(post_url, headers=headers, timeout=15)
 
         html = r.text
-        log("Media found: " + str(media_url))
-        # debug
-        print("Post request status:", r.status_code)
 
-        video = re.search(r'property="og:video" content="([^"]+)"', html)
-        image = re.search(r'property="og:image" content="([^"]+)"', html)
+        video_match = re.search(r'property="og:video" content="([^"]+)"', html)
+        image_match = re.search(r'property="og:image" content="([^"]+)"', html)
 
-        if video:
-            url = video.group(1)
-            print("Video found")
-            return "video", url
+        if video_match:
+            media_url = video_match.group(1)
+            return "video", media_url
 
-        if image:
-            url = image.group(1)
-            print("Image found")
-            return "photo", url
+        if image_match:
+            media_url = image_match.group(1)
+            return "photo", media_url
 
-        print("Media not found")
         return None, None
-    
+
     except Exception as e:
 
-        print("Media error:", e)
+        print("Media fetch error:", e)
         return None, None
 # =========================
 # START COMMAND
@@ -255,7 +246,10 @@ def send_next(call):
 
     for post_url in posts:
         media_type, media_url = fetch_media(post_url)
-
+                # DEBUG LOGS
+        print("Checking post:", post_url)
+        print("Media type:", media_type)
+        print("Media URL:", media_url)
         if media_url:
 
             try:
