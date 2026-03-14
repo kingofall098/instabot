@@ -10,7 +10,7 @@ import re
 import uuid
 import time
 import random
-TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
+TOKEN = "8429656135:AAFZcHr-sKqcp5eBYsJWeP8YaSlvCeoyp2s"
 
 bot = telebot.TeleBot(TOKEN)
 
