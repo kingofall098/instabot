@@ -36,7 +36,13 @@ user_jobs = {}
 # =========================
 
 post_cache = {}
+import datetime
 
+def log(msg):
+
+    t = datetime.datetime.now().strftime("%H:%M:%S")
+
+    print(f"[{t}] {msg}")
 
 # =========================
 # START PLAYWRIGHT
@@ -190,27 +196,39 @@ def scrape_background(job):
         print("Scraper error:", e)        
 import requests
 
+import requests
+import re
+
 def fetch_media(post_url):
 
     try:
 
         headers = {
-            "User-Agent": "Mozilla/5.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9"
         }
 
-        r = requests.get(post_url, headers=headers, timeout=10)
+        r = requests.get(post_url, headers=headers, timeout=15, allow_redirects=True)
 
         html = r.text
+
+        # debug
+        print("Post request status:", r.status_code)
 
         video = re.search(r'property="og:video" content="([^"]+)"', html)
         image = re.search(r'property="og:image" content="([^"]+)"', html)
 
         if video:
-            return "video", video.group(1)
+            url = video.group(1)
+            print("Video found")
+            return "video", url
 
         if image:
-            return "photo", image.group(1)
+            url = image.group(1)
+            print("Image found")
+            return "photo", url
 
+        print("Media not found")
         return None, None
 
     except Exception as e:
@@ -323,23 +341,26 @@ def send_next(call):
         return
 
     for post_url in posts:
-
         media_type, media_url = fetch_media(post_url)
 
-        try:
+        if media_url:
 
-            if media_type == "video":
-                bot.send_video(call.message.chat.id, media_url)
+            try:
 
-            elif media_type == "photo":
-                bot.send_photo(call.message.chat.id, media_url)
+                if media_type == "video":
+                    bot.send_video(chat_id, media_url)
 
-            else:
-                bot.send_message(call.message.chat.id, post_url)
+                elif media_type == "photo":
+                    bot.send_photo(chat_id, media_url)
 
-        except:
+            except Exception as e:
 
-            bot.send_message(call.message.chat.id, post_url)
+                print("Telegram error:", e)
+                bot.send_message(chat_id, post_url)
+
+        else:
+
+            bot.send_message(chat_id, post_url)
 
         time.sleep(random.uniform(1.5,3))
 
