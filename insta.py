@@ -188,34 +188,30 @@ def scrape_background(job):
     except Exception as e:
 
         print("Scraper error:", e)        
+import requests
+
 def fetch_media(post_url):
 
     try:
 
-        with sync_playwright() as p:
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+        r = requests.get(post_url, headers=headers, timeout=10)
 
-            page.goto(post_url, wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
+        html = r.text
 
-            html = page.content()
+        video = re.search(r'property="og:video" content="([^"]+)"', html)
+        image = re.search(r'property="og:image" content="([^"]+)"', html)
 
-            video = re.search(r'"video_url":"([^"]+)"', html)
-            image = re.search(r'"display_url":"([^"]+)"', html)
+        if video:
+            return "video", video.group(1)
 
-            browser.close()
+        if image:
+            return "photo", image.group(1)
 
-            if video:
-                url = video.group(1).replace("\\u0026","&")
-                return "video", url
-
-            if image:
-                url = image.group(1).replace("\\u0026","&")
-                return "photo", url
-
-            return None, None
+        return None, None
 
     except Exception as e:
 
