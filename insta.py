@@ -137,7 +137,10 @@ def scrape_background(job):
                 log("instagram block the session")
                 return
             
-            page.wait_for_selector("article", timeout=30000)
+            try:
+                page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
+            except:
+                print("Posts not visible yet, trying scroll...")
 
             for _ in range(20):
 
@@ -145,12 +148,11 @@ def scrape_background(job):
                     break
 
                 links = page.evaluate("""
-                    Array.from(document.querySelectorAll("article a"))
+                    Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
                     .map(a => a.href)
                 """)
 
                 for link in links:
-
                     link = link.split("?")[0]
 
                     if link not in job.posts:
@@ -165,7 +167,8 @@ def scrape_background(job):
 
     except Exception as e:
 
-        log(f"Scraper error: {e}")# =========================
+        log(f"Scraper error: {e}")
+# =========================
 # MEDIA FETCH
 # =========================
 
@@ -335,4 +338,3 @@ def send_next(call):
 print("Bot started")
 
 bot.infinity_polling()
-
