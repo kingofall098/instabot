@@ -171,7 +171,6 @@ def scrape_background(job):
 # =========================
 # MEDIA FETCH
 # =========================
-
 def fetch_media(post_url):
 
     try:
@@ -185,49 +184,18 @@ def fetch_media(post_url):
 
         html = r.text
 
-        # extract JSON from page
-        match = re.search(r'__additionalDataLoaded\([^,]+,(.*)\);</script>', html)
+        video = re.search(r'property="og:video" content="([^"]+)"', html)
+        image = re.search(r'property="og:image" content="([^"]+)"', html)
 
-        if not match:
-            log("JSON not found")
-            return []
+        items = []
 
-        data = json.loads(match.group(1))
+        if video:
+            items.append(("video", video.group(1)))
 
-        media = data["items"][0]
+        if image:
+            items.append(("photo", image.group(1)))
 
-        # --------------------
-        # CAROUSEL
-        # --------------------
-        if "carousel_media" in media:
-
-            items = []
-
-            for m in media["carousel_media"]:
-
-                if m.get("video_versions"):
-                    items.append(("video", m["video_versions"][0]["url"]))
-
-                elif m.get("image_versions2"):
-                    items.append(("photo", m["image_versions2"]["candidates"][0]["url"]))
-
-            return items
-
-
-        # --------------------
-        # VIDEO
-        # --------------------
-        if media.get("video_versions"):
-            return [("video", media["video_versions"][0]["url"])]
-
-
-        # --------------------
-        # PHOTO
-        # --------------------
-        if media.get("image_versions2"):
-            return [("photo", media["image_versions2"]["candidates"][0]["url"])]
-
-        return []
+        return items
 
     except Exception as e:
 
