@@ -27,7 +27,7 @@ from instaloader import Instaloader, Post
 # CONFIG
 # ===============================
 
-TOKEN = "8695844889:AAG4-jb2S1Y9BAF5O92WxkWZOaeubM5P3o8"
+TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 
 COOKIE_FILE = "cookies.txt"
 
