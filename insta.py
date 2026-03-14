@@ -263,7 +263,7 @@ def profile_handler(message):
 
     username = message.text.strip()
 
-    job = Job()
+    job = Job(username)
     user_jobs[message.chat.id] = job
 
     thread = threading.Thread(
