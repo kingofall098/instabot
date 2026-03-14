@@ -89,52 +89,59 @@ import threading
 
 def scrape_background(username, job):
 
+    from playwright.sync_api import sync_playwright
+
     try:
 
-        page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded")
+        with sync_playwright() as p:
 
-        page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
 
-        collected = set()
-        last_count = 0
-        no_new_scroll = 0
+            page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded")
 
-        while job.running:
+            page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
 
-            links = page.evaluate("""
-                Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
-                    .map(a => a.href)
-            """)
+            collected = set()
+            last_count = 0
+            no_new_scroll = 0
 
-            for link in links:
+            while job.running:
 
-                link = link.split("?")[0]
+                links = page.evaluate("""
+                    Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
+                        .map(a => a.href)
+                """)
 
-                if link in collected:
-                    continue
+                for link in links:
 
-                collected.add(link)
+                    link = link.split("?")[0]
 
-                job.posts.append(link)
+                    if link in collected:
+                        continue
 
-                print("Collected:", len(job.posts))
+                    collected.add(link)
+                    job.posts.append(link)
 
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(3)
+                    print("Collected:", len(job.posts))
 
-            if len(collected) == last_count:
-                no_new_scroll += 1
-            else:
-                no_new_scroll = 0
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(3)
 
-            last_count = len(collected)
+                if len(collected) == last_count:
+                    no_new_scroll += 1
+                else:
+                    no_new_scroll = 0
 
-            if no_new_scroll >= 3:
-                break
+                last_count = len(collected)
 
-        print("Scraping finished")
+                if no_new_scroll >= 3:
+                    break
+
+            browser.close()
 
     except Exception as e:
+
         print("Scraper error:", e)
 # =========================
 # FETCH PROFILE
