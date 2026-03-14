@@ -1,246 +1,376 @@
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import instaloader
+#DOWNOWLOAD INSTA MEDIA THROUGH LINK
+import os
+import re
+import json
+import uuid
+import logging
+import requests
+from datetime import datetime
+import pytz
+from http.cookiejar import MozillaCookieJar
+
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.constants import ChatAction
+
+from instaloader import Instaloader, Post
+
 import time
 import random
 
-TOKEN = "8608796288:AAG9DfM_iVuA2fQLZExC1GU1akgbp_md8kM"
-bot = telebot.TeleBot(TOKEN)
+time.sleep(random.uniform(1,2))
+# ===============================
+# CONFIG
+# ===============================
 
-# -----------------------------
-# INSTALOADER
-# -----------------------------
+TOKEN = "8628280617:AAEHHRQZ2dxsxoFWvmLs1PVO_wSCRn0rHPc"
 
-L = instaloader.Instaloader(
-    download_comments=False,
-    save_metadata=False,
-    download_video_thumbnails=False
+COOKIE_FILE = "cookies.txt"
+
+USERS_LOG_FILE = "users.log"
+ADMIN_FILE = "admin.json"
+
+DOWNLOAD_DIR = "downloads"
+
+TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
+
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+
+# ===============================
+# LOGGER
+# ===============================
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 
-# -----------------------------
-# LOAD SESSION FROM session.txt
-# -----------------------------
+logger = logging.getLogger(__name__)
+
+
+# ===============================
+# INSTAGRAM COOKIE SESSION
+# ===============================
+
+loader = Instaloader()
+
 
 def load_cookie_session():
 
-    try:
+    if not os.path.exists(COOKIE_FILE):
 
-        cookies = {}
+        print("❌ Cookie file not found!")
+        print("Put your exported cookies in:", COOKIE_FILE)
+        exit()
 
-        with open("session.txt","r") as f:
+    cookie_jar = MozillaCookieJar(COOKIE_FILE)
 
-            for line in f:
+    cookie_jar.load(ignore_discard=True, ignore_expires=True)
 
-                if "=" in line:
+    for cookie in cookie_jar:
 
-                    key,value = line.strip().split("=",1)
+        loader.context._session.cookies.set_cookie(cookie)
 
-                    cookies[key] = value
-
-        for k,v in cookies.items():
-
-            L.context._session.cookies.set(k,v)
-
-        print("Instagram cookie session loaded")
-
-    except Exception as e:
-
-        print("Cookie session failed:",e)
+    print("✅ Instagram cookies loaded")
 
 
 load_cookie_session()
 
-# -----------------------------
-# CACHE SYSTEM
-# -----------------------------
 
-user_cache = {}
-profile_cache = {}
+# ===============================
+# ADMIN SYSTEM
+# ===============================
 
-CACHE_TIME = 300
+def get_admin():
 
-# -----------------------------
-# delay function
-# -----------------------------
+    if os.path.exists(ADMIN_FILE):
 
-def delay(a=3,b=6):
-    time.sleep(random.uniform(a,b))
+        with open(ADMIN_FILE) as f:
+            return json.load(f).get("admin_id")
 
-# -----------------------------
-# get profile with cache
-# -----------------------------
+    return None
 
-def get_profile(username):
 
-    now = time.time()
+def set_admin(user_id):
 
-    if username in profile_cache:
+    if not os.path.exists(ADMIN_FILE):
 
-        profile,timestamp = profile_cache[username]
+        with open(ADMIN_FILE, "w") as f:
+            json.dump({"admin_id": user_id}, f)
 
-        if now - timestamp < CACHE_TIME:
-            return profile
 
-    delay()
+# ===============================
+# USER LOGGING
+# ===============================
 
-    profile = instaloader.Profile.from_username(L.context,username)
+def log_user(user):
 
-    profile_cache[username] = (profile,now)
+    tashkent_time = datetime.now(TASHKENT_TZ)
 
-    return profile
+    data = {
+        "user_id": user.id,
+        "username": user.username,
+        "first_name": user.first_name,
+        "timestamp": tashkent_time.strftime("%Y-%m-%d %H:%M:%S")
+    }
 
-# -----------------------------
-# start
-# -----------------------------
+    users = []
 
-@bot.message_handler(commands=['start'])
-def start(message):
+    if os.path.exists(USERS_LOG_FILE):
 
-    bot.reply_to(
-        message,
-        "Send an Instagram username\nExample:\n\nnatgeo"
+        with open(USERS_LOG_FILE) as f:
+            users = json.load(f)
+
+    for u in users:
+
+        if u["user_id"] == data["user_id"]:
+            u["timestamp"] = data["timestamp"]
+            break
+    else:
+        users.append(data)
+
+    with open(USERS_LOG_FILE, "w") as f:
+        json.dump(users, f, indent=4)
+
+
+# ===============================
+# USER STATS COMMAND
+# ===============================
+
+async def list_users(update, context):
+
+    user = update.effective_user
+
+    if user.id != get_admin():
+
+        await update.message.reply_text("❌ Admin only command")
+        return
+
+    if not os.path.exists(USERS_LOG_FILE):
+
+        await update.message.reply_text("No users yet.")
+        return
+
+    with open(USERS_LOG_FILE) as f:
+        users = json.load(f)
+
+    total = len(users)
+
+    today = datetime.now(TASHKENT_TZ).date()
+
+    today_users = sum(
+        1 for u in users
+        if datetime.strptime(u["timestamp"], "%Y-%m-%d %H:%M:%S").date() == today
     )
 
-# -----------------------------
-# username handler
-# -----------------------------
+    msg = f"📊 Total Users: {total}\n"
+    msg += f"🌍 Active Today: {today_users}\n\n"
 
-@bot.message_handler(func=lambda m: m.text and not m.text.startswith("/"))
-def username_handler(message):
+    for u in users:
 
-    username = message.text.strip().replace("@","")
+        msg += (
+            f"👤 {u['first_name']}\n"
+            f"ID: {u['user_id']}\n"
+            f"Username: @{u['username'] or 'N/A'}\n"
+            f"Last Active: {u['timestamp']}\n\n"
+        )
 
-    bot.reply_to(message,"Fetching profile...")
+    await update.message.reply_text(msg)
+
+
+# ===============================
+# URL HELPERS
+# ===============================
+
+# def extract_shortcode(url):
+
+#     m = re.search(r"instagram\.com/(?:p|reel|tv)/([^/?#&]+)", url)
+
+#     return m.group(1) if m else None
+
+
+# def valid_instagram_url(url):
+
+#     return bool(
+#         re.match(
+#             r"https?://(www\.)?instagram\.com/(p|reel|tv)/",
+#             url
+#         )
+        
+#     )
+def valid_instagram_url(url):
+
+    if "instagram.com" not in url:
+        return False
+
+    if "/p/" in url or "/reel/" in url or "/tv/" in url:
+        return True
+
+    return False
+def extract_shortcode(url):
+
+    match = re.search(r"(?:p|reel|tv)/([^/?#&]+)", url)
+
+    if match:
+        return match.group(1)
+
+    return None
+
+# ===============================
+# FETCH MEDIA URL
+# ===============================
+
+def fetch_instagram_media(url):
+
+    shortcode = extract_shortcode(url)
+
+    if not shortcode:
+        return None
 
     try:
 
-        profile = get_profile(username)
+        post = Post.from_shortcode(loader.context, shortcode)
+
+        media_list = []
+
+        # Carousel post
+        if post.typename == "GraphSidecar":
+
+            for node in post.get_sidecar_nodes():
+
+                if node.is_video:
+                    media_list.append(("video", node.video_url))
+                else:
+                    media_list.append(("photo", node.display_url))
+
+        # Single video
+        elif post.is_video:
+
+            media_list.append(("video", post.video_url))
+
+        # Single image
+        else:
+
+            media_list.append(("photo", post.url))
+
+        return media_list
 
     except Exception as e:
 
-        print(e)
+        logger.error(f"Instagram error: {e}")
 
-        bot.reply_to(message,"Profile not found.")
-        return
+        return None    
+# ===============================
+# START COMMAND
+# ===============================
 
-    user_cache[message.chat.id] = username
+async def start(update, context):
 
-    info = f"""
-Profile: {profile.username}
-Followers: {profile.followers}
-Posts: {profile.mediacount}
+    user = update.effective_user
 
-Choose what you want:
-"""
+    log_user(user)
 
-    keyboard = InlineKeyboardMarkup()
+    if get_admin() is None:
 
-    keyboard.add(
-        InlineKeyboardButton("📸 Latest Posts",callback_data="posts")
+        set_admin(user.id)
+
+        await update.message.reply_text("👑 You are now admin")
+
+    await update.message.reply_text(
+        "👋 Send a public Instagram post or reel link."
     )
 
-    keyboard.add(
-        InlineKeyboardButton("🎥 Reels",callback_data="reels")
-    )
 
-    keyboard.add(
-        InlineKeyboardButton("👤 Profile Info",callback_data="info")
-    )
+# ===============================
+# DOWNLOAD HANDLER
+# ===============================
 
-    bot.send_message(message.chat.id,info,reply_markup=keyboard)
+async def download(update, context):
 
-# -----------------------------
-# button handler
-# -----------------------------
+    user = update.effective_user
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback(call):
+    log_user(user)
 
-    chat_id = call.message.chat.id
+    url = update.message.text.strip()
 
-    if chat_id not in user_cache:
+    if not valid_instagram_url(url):
 
-        bot.send_message(chat_id,"Send a username first.")
+        await update.message.reply_text("❌ Invalid Instagram URL")
         return
 
-    username = user_cache[chat_id]
+    await update.message.chat.send_action(ChatAction.TYPING)
 
-    try:
+    progress = await update.message.reply_text("⏳ Fetching media...")
 
-        profile = get_profile(username)
+    media_items = fetch_instagram_media(url)
 
-    except:
-
-        bot.send_message(chat_id,"Failed to fetch profile.")
+    if not media_items:
+        await progress.edit_text("❌ Failed to fetch media")
         return
 
-    # latest posts
-    if call.data == "posts":
+    for media_type, media_url in media_items:
 
-        bot.send_message(chat_id,"Fetching latest posts...")
+        ext = ".mp4" if media_type == "video" else ".jpg"
 
-        count = 0
+        file_path = os.path.join(DOWNLOAD_DIR, f"{uuid.uuid4()}{ext}")
 
-        for post in profile.get_posts():
+        r = requests.get(
+            media_url,
+            stream=True,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://www.instagram.com/"
+            }
+        )
 
-            if count >= 10:
-                break
+        with open(file_path, "wb") as f:
+            for chunk in r.iter_content(1024):
+                f.write(chunk)
 
-            if post.is_video:
-                bot.send_message(chat_id,post.video_url)
-            else:
-                bot.send_message(chat_id,post.url)
+        with open(file_path, "rb") as f:
 
-            count += 1
+                if ext == ".mp4":
 
-            delay(1,2)
+                    await context.bot.send_video(
+                        chat_id=update.effective_chat.id,
+                        video=f,
+                        caption="waism",
+                        width=720,
+                        height=1280,
+                        supports_streaming=True
+                    )
 
-    # reels
-    elif call.data == "reels":
+                else:
 
-        bot.send_message(chat_id,"Fetching reels...")
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id,
+                        photo=f,
+                        caption="wasim"
+                    )
 
-        count = 0
+        os.remove(file_path)    
+        try:
+            await progress.delete()
+        except:
+            pass
 
-        for post in profile.get_posts():
 
-            if count >= 10:
-                break
+# ===============================
+# MAIN
+# ===============================
 
-            if post.is_video:
+def main():
 
-                bot.send_message(chat_id,post.video_url)
+    application = Application.builder().token(TOKEN).build()
 
-                count += 1
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("users", list_users))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
 
-                delay(1,2)
+    print("Bot running...")
 
-    # profile info
-    elif call.data == "info":
+    application.run_polling()
 
-        bio = profile.biography if profile.biography else "No bio"
 
-        text = f"""
-Username: {profile.username}
-Followers: {profile.followers}
-Following: {profile.followees}
-Posts: {profile.mediacount}
-
-Bio:
-{bio}
-
-Profile Pic:
-{profile.profile_pic_url}
-"""
-
-        bot.send_message(chat_id,text)
-
-# -----------------------------
-# run bot
-# -----------------------------
-
-print("Bot running...")
-
-bot.remove_webhook()
-
-bot.infinity_polling(skip_pending=True)
+if __name__ == "__main__":
+    main()
