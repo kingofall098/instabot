@@ -300,18 +300,34 @@ def send_next(call):
 
         try:
 
+            from io import BytesIO
+            from PIL import Image
+
             media_url = media_url.replace("&amp;", "&")
             media_url = media_url.replace(".heic", ".jpg")
 
             log(f"Final media URL: {media_url}")
 
-            # fast download using playwright request API
-            response = context.request.get(media_url)
+            # get cookies from the logged-in browser session
+            cookies = {c["name"]: c["value"] for c in browser.cookies()}
 
-            if response.status != 200:
-                raise Exception(f"Download failed {response.status}")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Referer": post_url,
+                "Accept": "*/*"
+            }
 
-            content = response.body()
+            response = requests.get(
+                media_url,
+                headers=headers,
+                cookies=cookies,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                raise Exception(f"Download failed {response.status_code}")
+
+            content = response.content
 
 
             if media_type == "video":
@@ -321,8 +337,6 @@ def send_next(call):
                 bot.send_video(call.message.chat.id, file)
 
             elif media_type == "photo":
-
-                from PIL import Image
 
                 img = Image.open(BytesIO(content)).convert("RGB")
 
@@ -359,4 +373,3 @@ def send_next(call):
 print("Bot started")
 
 bot.infinity_polling()
-
