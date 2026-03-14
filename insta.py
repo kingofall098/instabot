@@ -307,7 +307,16 @@ def send_next(call):
                     "Accept-Language": "en-US,en;q=0.9"
                 }
 
-                r = requests.get(media_url, headers=headers, timeout=20)
+                cookies = {
+                    "sessionid": IG_SESSIONID
+                }
+
+                r = requests.get(
+                    media_url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=20
+                )
 
                 print("Download status:", r.status_code)
 
