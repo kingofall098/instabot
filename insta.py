@@ -295,10 +295,18 @@ def send_next(call):
 
             try:
 
+                # clean url for telegram
+                media_url = media_url.replace("&amp;", "&")
+
                 if media_type == "video":
+
                     bot.send_video(call.message.chat.id, media_url)
 
                 elif media_type == "photo":
+
+                    # convert heic → jpg
+                    media_url = media_url.replace(".heic", ".jpg")
+
                     bot.send_photo(call.message.chat.id, media_url)
 
             except Exception as e:
@@ -311,7 +319,7 @@ def send_next(call):
             bot.send_message(call.message.chat.id, post_url)
 
         time.sleep(random.uniform(1.5,3))
-
+        print("Final media URL:", media_url)
     job.sent += len(posts)
 
     markup = InlineKeyboardMarkup()
