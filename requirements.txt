@@ -2,3 +2,4 @@ pyTelegramBotAPI
 instaloader
 playwright
 pytz
+python-telegram-bot
