@@ -8,7 +8,7 @@ import time
 import random
 import re
 import json
-
+from io import BytesIO
 # =========================
 # BOT TOKEN
 # =========================
@@ -301,21 +301,29 @@ def send_next(call):
                 print("Final media URL:", media_url)
 
                 headers = {
-                    "User-Agent": "Mozilla/5.0"
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                    "Referer": "https://www.instagram.com/",
+                    "Accept": "*/*",
+                    "Accept-Language": "en-US,en;q=0.9"
                 }
 
                 r = requests.get(media_url, headers=headers, timeout=20)
 
+                print("Download status:", r.status_code)
+
                 if r.status_code != 200:
                     raise Exception(f"Download failed {r.status_code}")
 
-                if media_type == "video":
 
-                    bot.send_video(call.message.chat.id, r.content)
+                file = BytesIO(r.content)
+
+                if media_type == "video":
+                    file.name = "video.mp4"
+                    bot.send_video(call.message.chat.id, file)
 
                 elif media_type == "photo":
-
-                    bot.send_photo(call.message.chat.id, r.content)
+                    file.name = "photo.jpg"
+                    bot.send_photo(call.message.chat.id, file)
 
             except Exception as e:
 
