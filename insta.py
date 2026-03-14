@@ -6,7 +6,7 @@ import time
 import random
 from http.cookiejar import MozillaCookieJar
 
-TOKEN = "8429656135:AAFZcHr-sKqcp5eBYsJWeP8YaSlvCeoyp2s"
+TOKEN = "8780791852:AAHqVZYRVc7QEyzCNxzAqIdfDCZuoMPZtYY"
 bot = telebot.TeleBot(TOKEN)
 
 # -----------------------------
