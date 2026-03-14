@@ -1,7 +1,7 @@
 import telebot
 import requests
 
-TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
+TOKEN = "8780791852:AAHqVZYRVc7QEyzCNxzAqIdfDCZuoMPZtYY"
 
 headers = {
     "User-Agent": "Mozilla/5.0"
