@@ -264,24 +264,24 @@ def cancel(call):
 # =========================
 # SEND POSTS
 # =========================
-
 @bot.callback_query_handler(func=lambda call: call.data == "next")
 def send_next(call):
 
     job = user_jobs.get(call.message.chat.id)
 
     if not job:
-        bot.send_message(call.message.chat.id,"No active job")
+        bot.send_message(call.message.chat.id, "No active job")
         return
 
     start = job.sent
     end = start + 10
-
     posts = job.posts[start:end]
 
     if not posts:
-        bot.send_message(call.message.chat.id,"Still collecting posts...")
+        bot.send_message(call.message.chat.id, "Still collecting posts...")
         return
+
+    from io import BytesIO
 
     for post_url in posts:
 
@@ -290,71 +290,50 @@ def send_next(call):
         log(f"Checking post: {post_url}")
         log(f"Media type: {media_type}")
         log(f"Media URL: {media_url}")
-        
-        if media_url:
 
-            try:
+        if not media_url:
+            bot.send_message(call.message.chat.id, post_url)
+            continue
 
-                media_url = media_url.replace("&amp;", "&")
-                media_url = media_url.replace(".heic", ".jpg")
+        try:
 
-                print("Final media URL:", media_url)
+            media_url = media_url.replace("&amp;", "&")
+            media_url = media_url.replace(".heic", ".jpg")
 
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-                    "Referer": post_url,
-                    "Origin": "https://www.instagram.com",
-                    "Accept": "*/*",
-                    "Accept-Language": "en-US,en;q=0.9",
-                }
+            log(f"Final media URL: {media_url}")
 
-                cookies = {
-                    "sessionid": IG_SESSIONID
-                }
+            # open media in playwright (keeps cookies/session)
+            page = browser.new_page()
 
-                media_url = media_url.replace("&amp;", "&")
-                media_url = media_url.replace(".heic", ".jpg")
+            response = page.goto(media_url)
 
-                print("Final media URL:", media_url)
+            if not response:
+                raise Exception("No response from media")
 
-                r = requests.get(
-                    media_url,
-                    headers=headers,
-                    cookies=cookies,
-                    timeout=20
-                )
+            content = response.body()
 
-                print("Download status:", r.status_code)
+            file = BytesIO(content)
 
-                if r.status_code != 200:
-                    raise Exception(f"Download failed {r.status_code}")
+            if media_type == "video":
+                file.name = "video.mp4"
+                bot.send_video(call.message.chat.id, file)
 
-                file = BytesIO(r.content)
+            elif media_type == "photo":
+                file.name = "photo.jpg"
+                bot.send_photo(call.message.chat.id, file)
 
-                if media_type == "video":
-                    file.name = "video.mp4"
-                    bot.send_video(call.message.chat.id, file)
+            page.close()
 
-                elif media_type == "photo":
-                    file.name = "photo.jpg"
-                    bot.send_photo(call.message.chat.id, file)
+        except Exception as e:
 
-            except Exception as e:
-
-                log(f"Telegram error: {e}")
-                bot.send_message(call.message.chat.id, post_url)
-        
-
-        else:
-
+            log(f"Telegram error: {e}")
             bot.send_message(call.message.chat.id, post_url)
 
-        time.sleep(random.uniform(1.5,3))
-        print("Final media URL:", media_url)
+        time.sleep(random.uniform(1.5, 3))
+
     job.sent += len(posts)
 
     markup = InlineKeyboardMarkup()
-
     markup.add(
         InlineKeyboardButton("Next 10", callback_data="next"),
         InlineKeyboardButton("Cancel", callback_data="cancel")
