@@ -21,22 +21,22 @@ os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 # LOAD INSTAGRAM SESSION
 # =====================================
 
+import http.cookiejar
+
 def load_session():
 
     try:
 
-        with open("session.txt") as f:
-            data = f.read().strip()
+        cj = http.cookiejar.MozillaCookieJar("session.txt")
+        cj.load(ignore_discard=True, ignore_expires=True)
 
-        sessionid = data.replace("sessionid=", "")
+        L.context._session.cookies.update(cj)
 
-        L.context._session.cookies.set("sessionid", sessionid)
+        print("Instagram cookies loaded")
 
-        print("Instagram session loaded")
+    except Exception as e:
 
-    except:
-        print("No session file found")
-
+        print("Cookie load error:", e)
 
 # =====================================
 # INSTALOADER SETUP
