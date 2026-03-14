@@ -44,6 +44,24 @@ browser = play.chromium.launch_persistent_context(
 
 page = browser.new_page()
 
+# open instagram first
+page.goto("https://www.instagram.com")
+
+# add session cookie
+browser.add_cookies([
+    {
+        "name": "sessionid",
+        "value": IG_SESSIONID,
+        "domain": ".instagram.com",
+        "path": "/",
+        "httpOnly": True,
+        "secure": True,
+        "sameSite": "None"
+    }
+])
+
+# reload so cookie applies
+page.goto("https://www.instagram.com/")
 
 # =========================
 # ADD INSTAGRAM SESSION
@@ -89,7 +107,7 @@ def fetch_profile(username):
             return None
 
         # wait for posts
-        page.wait_for_selector("article", timeout=30000)
+        page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
 
         posts = set()
 
@@ -248,7 +266,8 @@ def callback_handler(call):
             "Load more posts:",
             reply_markup=markup
         )
-
+html = page.content()
+print("HTML size:", len(html))
 
 # =========================
 # RUN BOT
