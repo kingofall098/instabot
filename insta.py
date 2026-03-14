@@ -1,12 +1,16 @@
-#DOWNOWLOAD INSTA MEDIA THROUGH LINK
+# DOWNLOAD INSTA MEDIA THROUGH LINK
+
 import os
 import re
 import json
 import uuid
 import logging
 import requests
+import time
+import random
+
 from datetime import datetime
-import pytz
+from zoneinfo import ZoneInfo
 from http.cookiejar import MozillaCookieJar
 
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
@@ -14,10 +18,14 @@ from telegram.constants import ChatAction
 
 from instaloader import Instaloader, Post
 
-import time
-import random
+
+# ===============================
+# RANDOM START DELAY
+# ===============================
 
 time.sleep(random.uniform(1,2))
+
+
 # ===============================
 # CONFIG
 # ===============================
@@ -31,7 +39,7 @@ ADMIN_FILE = "admin.json"
 
 DOWNLOAD_DIR = "downloads"
 
-TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
+TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -42,7 +50,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    level=logging.INFO
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +61,6 @@ logger = logging.getLogger(__name__)
 # ===============================
 
 loader = Instaloader()
-
 
 def load_cookie_session():
 
@@ -72,7 +79,6 @@ def load_cookie_session():
         loader.context._session.cookies.set_cookie(cookie)
 
     print("✅ Instagram cookies loaded")
-
 
 load_cookie_session()
 
@@ -182,22 +188,6 @@ async def list_users(update, context):
 # URL HELPERS
 # ===============================
 
-# def extract_shortcode(url):
-
-#     m = re.search(r"instagram\.com/(?:p|reel|tv)/([^/?#&]+)", url)
-
-#     return m.group(1) if m else None
-
-
-# def valid_instagram_url(url):
-
-#     return bool(
-#         re.match(
-#             r"https?://(www\.)?instagram\.com/(p|reel|tv)/",
-#             url
-#         )
-        
-#     )
 def valid_instagram_url(url):
 
     if "instagram.com" not in url:
@@ -207,6 +197,8 @@ def valid_instagram_url(url):
         return True
 
     return False
+
+
 def extract_shortcode(url):
 
     match = re.search(r"(?:p|reel|tv)/([^/?#&]+)", url)
@@ -215,6 +207,7 @@ def extract_shortcode(url):
         return match.group(1)
 
     return None
+
 
 # ===============================
 # FETCH MEDIA URL
@@ -233,7 +226,7 @@ def fetch_instagram_media(url):
 
         media_list = []
 
-        # Carousel post
+        # carousel
         if post.typename == "GraphSidecar":
 
             for node in post.get_sidecar_nodes():
@@ -243,12 +236,12 @@ def fetch_instagram_media(url):
                 else:
                     media_list.append(("photo", node.display_url))
 
-        # Single video
+        # video
         elif post.is_video:
 
             media_list.append(("video", post.video_url))
 
-        # Single image
+        # photo
         else:
 
             media_list.append(("photo", post.url))
@@ -259,7 +252,9 @@ def fetch_instagram_media(url):
 
         logger.error(f"Instagram error: {e}")
 
-        return None    
+        return None
+
+
 # ===============================
 # START COMMAND
 # ===============================
@@ -305,6 +300,7 @@ async def download(update, context):
     media_items = fetch_instagram_media(url)
 
     if not media_items:
+
         await progress.edit_text("❌ Failed to fetch media")
         return
 
@@ -329,30 +325,31 @@ async def download(update, context):
 
         with open(file_path, "rb") as f:
 
-                if ext == ".mp4":
+            if ext == ".mp4":
 
-                    await context.bot.send_video(
-                        chat_id=update.effective_chat.id,
-                        video=f,
-                        caption="waism",
-                        width=720,
-                        height=1280,
-                        supports_streaming=True
-                    )
+                await context.bot.send_video(
+                    chat_id=update.effective_chat.id,
+                    video=f,
+                    caption="waism",
+                    width=720,
+                    height=1280,
+                    supports_streaming=True
+                )
 
-                else:
+            else:
 
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=f,
-                        caption="wasim"
-                    )
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=f,
+                    caption="wasim"
+                )
 
-        os.remove(file_path)    
-        try:
-            await progress.delete()
-        except:
-            pass
+        os.remove(file_path)
+
+    try:
+        await progress.delete()
+    except:
+        pass
 
 
 # ===============================
