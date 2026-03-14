@@ -115,13 +115,21 @@ def scrape_background(job):
 
             page.goto(url, wait_until="domcontentloaded")
 
-            page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
+            time.sleep(5)
+
+            print("Current URL:", page.url)
+
+            if "login" in page.url:
+                print("Instagram redirected to login")
+                return
+
+            page.wait_for_selector("article", timeout=30000)
 
             while job.running:
 
                 links = page.evaluate("""
-                    Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
-                        .map(a => a.href)
+                Array.from(document.querySelectorAll("article a"))
+                .map(a => a.href)
                 """)
 
                 for link in links:
