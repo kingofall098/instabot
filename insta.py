@@ -151,6 +151,8 @@ def scrape_background(username, job):
 # =========================
 def scrape_background(job):
 
+    print("Scraping:", job.username)
+
     try:
 
         with sync_playwright() as p:
@@ -158,18 +160,11 @@ def scrape_background(job):
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
 
-            delay = random.uniform(4,8)
-            time.sleep(delay)
-
             url = f"https://www.instagram.com/{job.username}/"
 
             page.goto(url, wait_until="domcontentloaded")
 
             page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
-
-            collected = set()
-            last_count = 0
-            no_new_scroll = 0
 
             while job.running:
 
@@ -182,28 +177,11 @@ def scrape_background(job):
 
                     link = link.split("?")[0]
 
-                    if link in collected:
-                        continue
-
-                    collected.add(link)
-                    job.posts.append(link)
-
-                    print("Collected:", len(job.posts))
+                    if link not in job.posts:
+                        job.posts.append(link)
 
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(random.uniform(2,4))
-
-                if len(collected) == last_count:
-                    no_new_scroll += 1
-                else:
-                    no_new_scroll = 0
-
-                last_count = len(collected)
-
-                if no_new_scroll >= 3:
-                    break
-
-            browser.close()
+                time.sleep(3)
 
     except Exception as e:
 
