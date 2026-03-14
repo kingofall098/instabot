@@ -150,18 +150,31 @@ def fetch_media(post_url):
 
         r = requests.get(post_url, headers=headers, timeout=15)
 
+        print("Post request status:", r.status_code)
+
         html = r.text
 
-        video_match = re.search(r'property="og:video" content="([^"]+)"', html)
-        image_match = re.search(r'property="og:image" content="([^"]+)"', html)
+        match = re.search(r'__additionalDataLoaded\([^,]+,(.*)\);</script>', html)
 
-        if video_match:
-            media_url = video_match.group(1)
-            return "video", media_url
+        if not match:
+            print("JSON block not found")
+            return None, None
 
-        if image_match:
-            media_url = image_match.group(1)
-            return "photo", media_url
+        import json
+
+        data = json.loads(match.group(1))
+
+        media = data["items"][0]
+
+        # VIDEO
+        if media.get("video_versions"):
+            url = media["video_versions"][0]["url"]
+            return "video", url
+
+        # PHOTO
+        if media.get("image_versions2"):
+            url = media["image_versions2"]["candidates"][0]["url"]
+            return "photo", url
 
         return None, None
 
