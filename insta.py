@@ -94,64 +94,7 @@ browser.add_cookies([
     }
 ])
 
-import threading
 
-def scrape_background(username, job):
-
-    from playwright.sync_api import sync_playwright
-
-    try:
-
-        with sync_playwright() as p:
-
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-
-            page.goto(f"https://www.instagram.com/{username}/", wait_until="domcontentloaded")
-
-            page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
-
-            collected = set()
-            last_count = 0
-            no_new_scroll = 0
-
-            while job.running:
-
-                links = page.evaluate("""
-                    Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
-                        .map(a => a.href)
-                """)
-
-                for link in links:
-
-                    link = link.split("?")[0]
-
-                    if link in collected:
-                        continue
-
-                    collected.add(link)
-                    job.posts.append(link)
-
-                    print("Collected:", len(job.posts))
-
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(3)
-
-                if len(collected) == last_count:
-                    no_new_scroll += 1
-                else:
-                    no_new_scroll = 0
-
-                last_count = len(collected)
-
-                if no_new_scroll >= 3:
-                    break
-
-            browser.close()
-
-    except Exception as e:
-
-        print("Scraper error:", e)
 # =========================
 # FETCH PROFILE
 # =========================
@@ -211,7 +154,7 @@ def fetch_media(post_url):
         r = requests.get(post_url, headers=headers, timeout=15, allow_redirects=True)
 
         html = r.text
-
+        log("Media found: " + str(media_url))
         # debug
         print("Post request status:", r.status_code)
 
@@ -230,7 +173,7 @@ def fetch_media(post_url):
 
         print("Media not found")
         return None, None
-
+    
     except Exception as e:
 
         print("Media error:", e)
@@ -290,36 +233,6 @@ def cancel(call):
         job.running = False
 
     bot.send_message(call.message.chat.id,"Scraping stopped.")
-
-
-@bot.message_handler(func=lambda m: True)
-def username_handler(message):
-
-    username = message.text.strip()
-
-    job = Job(username)
-
-    user_jobs[message.chat.id] = job
-
-    thread = threading.Thread(
-        target=scrape_background,
-        args=(job,)
-    )
-
-    thread.start()
-
-    markup = InlineKeyboardMarkup()
-
-    markup.add(
-        InlineKeyboardButton("Download 10", callback_data="next"),
-        InlineKeyboardButton("Cancel", callback_data="cancel")
-    )
-
-    bot.send_message(
-        message.chat.id,
-        "Scraping started. Press Download to receive posts.",
-        reply_markup=markup
-    )
     
 @bot.callback_query_handler(func=lambda call: call.data == "next")
 def send_next(call):
@@ -348,22 +261,22 @@ def send_next(call):
             try:
 
                 if media_type == "video":
-                    bot.send_video(chat_id, media_url)
+                    bot.send_video(call.message.chat.id, media_url)
 
                 elif media_type == "photo":
-                    bot.send_photo(chat_id, media_url)
+                    bot.send_photo(call.message.chat.id, media_url)
 
             except Exception as e:
 
                 print("Telegram error:", e)
-                bot.send_message(chat_id, post_url)
+                bot.send_message(call.message.chat.id, post_url)
 
         else:
 
-            bot.send_message(chat_id, post_url)
+            bot.send_message(call.message.chat.id, post_url)
 
         time.sleep(random.uniform(1.5,3))
-
+    log(f"Sending media from: {post_url}")
     job.sent += len(posts)
 
     markup = InlineKeyboardMarkup()
@@ -378,49 +291,7 @@ def send_next(call):
         f"Sent {job.sent} posts",
         reply_markup=markup
     )
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
 
-    action, username, start = call.data.split("|")
-    start = int(start)
-
-    edges = post_cache.get(username)
-
-    if not edges:
-        bot.send_message(call.message.chat.id, "Cache expired. Send username again.")
-        return
-
-    end = start + 10
-    posts = edges[start:end]
-
-    print("Sending posts:", start, "to", end)
-
-    for post in posts:
-
-        post_url = post["node"]["display_url"]
-
-        media_type, media_url = fetch_media(post_url)
-
-        try:
-
-            if media_type == "video":
-
-                bot.send_video(call.message.chat.id, media_url)
-
-            elif media_type == "photo":
-
-                bot.send_photo(call.message.chat.id, media_url)
-
-            else:
-
-                bot.send_message(call.message.chat.id, post_url)
-
-        except Exception as e:
-
-            print("Telegram send error:", e)
-            bot.send_message(call.message.chat.id, post_url)
-
-        time.sleep(random.uniform(2,4))
 # =========================
 # RUN BOT
 # =========================
