@@ -160,7 +160,29 @@ def fetch_profile(username):
 
         print("FETCH ERROR:", e)
         return None
+def fetch_media(post_url):
 
+    try:
+
+        page.goto(post_url, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+
+        html = page.content()
+
+        video = re.search(r'property="og:video" content="([^"]+)"', html)
+        image = re.search(r'property="og:image" content="([^"]+)"', html)
+
+        if video:
+            return "video", video.group(1)
+
+        if image:
+            return "photo", image.group(1)
+
+        return None, None
+
+    except Exception as e:
+        print("Media fetch error:", e)
+        return None, None
 
 # =========================
 # START COMMAND
@@ -223,52 +245,45 @@ def profile_handler(message):
 def callback_handler(call):
 
     action, username, start = call.data.split("|")
-
     start = int(start)
 
     edges = post_cache.get(username)
 
     if not edges:
-
-        bot.send_message(
-            call.message.chat.id,
-            "Cache expired. Send username again."
-        )
-
+        bot.send_message(call.message.chat.id, "Cache expired. Send username again.")
         return
 
-    posts = edges[start:start+10]
+    end = start + 10
+    posts = edges[start:end]
+
+    print("Sending posts:", start, "to", end)
 
     for post in posts:
 
-        node = post["node"]
+        post_url = post["node"]["display_url"]
 
-        bot.send_message(
-            call.message.chat.id,
-            node["display_url"]
-        )
+        media_type, media_url = fetch_media(post_url)
 
-    next_start = start + 10
+        try:
 
-    if next_start < len(edges):
+            if media_type == "video":
 
-        markup = InlineKeyboardMarkup()
+                bot.send_video(call.message.chat.id, media_url)
 
-        btn = InlineKeyboardButton(
-            "Next 10 Posts",
-            callback_data=f"posts|{username}|{next_start}"
-        )
+            elif media_type == "photo":
 
-        markup.add(btn)
+                bot.send_photo(call.message.chat.id, media_url)
 
-        bot.send_message(
-            call.message.chat.id,
-            "Load more posts:",
-            reply_markup=markup
-        )
-html = page.content()
-print("HTML size:", len(html))
+            else:
 
+                bot.send_message(call.message.chat.id, post_url)
+
+        except Exception as e:
+
+            print("Telegram send error:", e)
+            bot.send_message(call.message.chat.id, post_url)
+
+        time.sleep(random.uniform(2,4))
 # =========================
 # RUN BOT
 # =========================
