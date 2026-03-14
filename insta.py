@@ -284,7 +284,7 @@ def send_next(call):
     from io import BytesIO
 
     # use existing browser context
-    context = browser.contexts[0]
+    context = browser
 
     for post_url in posts:
 
@@ -359,3 +359,4 @@ def send_next(call):
 print("Bot started")
 
 bot.infinity_polling()
+
