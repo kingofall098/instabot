@@ -19,7 +19,7 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 # INSTAGRAM SESSION
 # =========================
 
-IG_SESSIONID = "43597613669%3Aa8ilkHnXtvOs70%3A16%3AAYhtiUZ55V_QMc7iC_I0G2l47xIBEFaR0R5JTKAB-g"
+IG_SESSIONID = "80454330558%3AtpURNMPKDVS2DH%3A16%3AAYjBDatw2qKZntVyio7s28j5Y7f0JchpOveCkxtx4w"
 class Job:
 
     def __init__(self, username):
