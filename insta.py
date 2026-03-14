@@ -302,19 +302,22 @@ def send_next(call):
 
             from io import BytesIO
             from PIL import Image
+            import requests
 
             media_url = media_url.replace("&amp;", "&")
             media_url = media_url.replace(".heic", ".jpg")
 
             log(f"Final media URL: {media_url}")
 
-            # get cookies from the logged-in browser session
-            cookies = {c["name"]: c["value"] for c in browser.cookies()}
+            # extract cookies from Playwright session
+            cookie_list = browser.cookies()
+            cookies = {c["name"]: c["value"] for c in cookie_list}
 
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                 "Referer": post_url,
-                "Accept": "*/*"
+                "Origin": "https://www.instagram.com",
+                "Accept": "*/*",
             }
 
             response = requests.get(
@@ -323,6 +326,8 @@ def send_next(call):
                 cookies=cookies,
                 timeout=30
             )
+
+            print("Download status:", response.status_code)
 
             if response.status_code != 200:
                 raise Exception(f"Download failed {response.status_code}")
