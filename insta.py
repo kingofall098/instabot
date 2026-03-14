@@ -8,22 +8,61 @@ TOKEN = "8429656135:AAFZcHr-sKqcp5eBYsJWeP8YaSlvCeoyp2s"
 
 bot = telebot.TeleBot(TOKEN)
 
+# -----------------------------
+# INSTALOADER
+# -----------------------------
+
 L = instaloader.Instaloader(
     download_comments=False,
     save_metadata=False,
     download_video_thumbnails=False
 )
 
-# store usernames temporarily
+# load instagram session
+try:
+    L.load_session_from_file("your_instagram_username")
+    print("Instagram session loaded")
+except:
+    print("Session not found. Run: instaloader --login your_instagram_username")
+
+# -----------------------------
+# CACHE SYSTEM
+# -----------------------------
+
 user_cache = {}
+profile_cache = {}
+
+CACHE_TIME = 300  # seconds
 
 
 # -----------------------------
 # delay function
 # -----------------------------
 
-def delay(a=1.5, b=3):
+def delay(a=3, b=6):
     time.sleep(random.uniform(a, b))
+
+
+# -----------------------------
+# get profile (with cache)
+# -----------------------------
+
+def get_profile(username):
+
+    now = time.time()
+
+    if username in profile_cache:
+
+        profile, timestamp = profile_cache[username]
+
+        if now - timestamp < CACHE_TIME:
+            return profile
+
+    profile = instaloader.Profile.from_username(L.context, username)
+
+    profile_cache[username] = (profile, now)
+
+    return profile
 
 
 # -----------------------------
@@ -46,17 +85,18 @@ def start(message):
 @bot.message_handler(func=lambda m: m.text and not m.text.startswith("/"))
 def username_handler(message):
 
-    username = message.text.strip().replace("@","")
+    username = message.text.strip().replace("@", "")
 
     bot.reply_to(message, "Fetching profile...")
 
     delay()
 
     try:
+        profile = get_profile(username)
 
-        profile = instaloader.Profile.from_username(L.context, username)
+    except Exception as e:
 
-    except:
+        print(e)
 
         bot.reply_to(message, "Profile not found.")
         return
@@ -103,9 +143,13 @@ def callback(call):
 
     username = user_cache[chat_id]
 
-    delay(2,4)
+    delay()
 
-    profile = instaloader.Profile.from_username(L.context, username)
+    try:
+        profile = get_profile(username)
+    except:
+        bot.send_message(chat_id, "Failed to fetch profile.")
+        return
 
     # -------------------------
     # latest posts
@@ -124,7 +168,6 @@ def callback(call):
 
             if post.is_video:
                 bot.send_message(chat_id, post.video_url)
-
             else:
                 bot.send_message(chat_id, post.url)
 
