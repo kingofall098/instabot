@@ -108,5 +108,10 @@ def download(message):
             )
 
 
-print("Bot running...")
-bot.infinity_polling()
+bot.remove_webhook()
+
+while True:
+    try:
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    except Exception as e:
+        print(e)
