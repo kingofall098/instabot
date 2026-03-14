@@ -290,7 +290,7 @@ def send_next(call):
         log(f"Checking post: {post_url}")
         log(f"Media type: {media_type}")
         log(f"Media URL: {media_url}")
-
+        
         if media_url:
 
             try:
@@ -302,14 +302,20 @@ def send_next(call):
 
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-                    "Referer": "https://www.instagram.com/",
+                    "Referer": post_url,
+                    "Origin": "https://www.instagram.com",
                     "Accept": "*/*",
-                    "Accept-Language": "en-US,en;q=0.9"
+                    "Accept-Language": "en-US,en;q=0.9",
                 }
 
                 cookies = {
                     "sessionid": IG_SESSIONID
                 }
+
+                media_url = media_url.replace("&amp;", "&")
+                media_url = media_url.replace(".heic", ".jpg")
+
+                print("Final media URL:", media_url)
 
                 r = requests.get(
                     media_url,
@@ -322,7 +328,6 @@ def send_next(call):
 
                 if r.status_code != 200:
                     raise Exception(f"Download failed {r.status_code}")
-
 
                 file = BytesIO(r.content)
 
