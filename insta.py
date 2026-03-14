@@ -309,9 +309,12 @@ def send_next(call):
 
             log(f"Final media URL: {media_url}")
 
-            # extract cookies from Playwright session
+            # get ALL cookies from Playwright browser session
             cookie_list = browser.cookies()
-            cookies = {c["name"]: c["value"] for c in cookie_list}
+
+            cookies = {}
+            for c in cookie_list:
+                cookies[c["name"]] = c["value"]
 
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -333,7 +336,6 @@ def send_next(call):
                 raise Exception(f"Download failed {response.status_code}")
 
             content = response.content
-
 
             if media_type == "video":
 
