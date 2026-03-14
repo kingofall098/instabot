@@ -283,6 +283,9 @@ def send_next(call):
 
     from io import BytesIO
 
+    # use existing browser context
+    context = browser.contexts[0]
+
     for post_url in posts:
 
         media_type, media_url = fetch_media(post_url)
@@ -302,15 +305,16 @@ def send_next(call):
 
             log(f"Final media URL: {media_url}")
 
-            # open media in playwright (keeps cookies/session)
-            page = browser.new_page()
+            # fast download using playwright request API
+            response = context.request.get(media_url)
 
-            response = page.goto(media_url)
-
-            if not response:
-                raise Exception("No response from media")
+            if response.status != 200:
+                raise Exception(f"Download failed {response.status}")
 
             content = response.body()
+
+            if len(content) < 1000:
+                raise Exception("Media file too small")
 
             file = BytesIO(content)
 
@@ -321,8 +325,6 @@ def send_next(call):
             elif media_type == "photo":
                 file.name = "photo.jpg"
                 bot.send_photo(call.message.chat.id, file)
-
-            page.close()
 
         except Exception as e:
 
@@ -344,7 +346,6 @@ def send_next(call):
         f"Sent {job.sent} posts",
         reply_markup=markup
     )
-
 # =========================
 # RUN BOT
 # =========================
