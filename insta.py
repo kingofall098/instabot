@@ -87,43 +87,66 @@ def scrape_background(job):
 
     try:
 
-        url = f"https://www.instagram.com/{username}/"
+        with sync_playwright() as p:
 
-        page.goto(url, wait_until="domcontentloaded")
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"]
+            )
 
-        time.sleep(5)
+            context = browser.new_context()
 
-        log(f"Current URL: {page.url}")
+            # add instagram session cookie
+            context.add_cookies([{
+                "name": "sessionid",
+                "value": IG_SESSIONID,
+                "domain": ".instagram.com",
+                "path": "/",
+                "httpOnly": True,
+                "secure": True,
+                "sameSite": "None"
+            }])
 
-        if "login" in page.url:
-            log("Instagram redirected to login")
-            return
+            page = context.new_page()
 
-        page.wait_for_selector("article", timeout=30000)
+            url = f"https://www.instagram.com/{username}/"
 
-        while job.running:
+            page.goto(url, wait_until="domcontentloaded")
 
-            links = page.evaluate("""
-                Array.from(document.querySelectorAll("article a"))
-                .map(a => a.href)
-            """)
+            time.sleep(5)
 
-            for link in links:
+            log(f"Current URL: {page.url}")
 
-                link = link.split("?")[0]
+            if "login" in page.url:
+                log("Instagram redirected to login")
+                return
 
-                if link not in job.posts:
-                    job.posts.append(link)
+            page.wait_for_selector("article", timeout=30000)
 
-            log(f"Collected posts: {len(job.posts)}")
+            while job.running:
 
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(3)
+                links = page.evaluate("""
+                    Array.from(document.querySelectorAll("article a"))
+                    .map(a => a.href)
+                """)
+
+                for link in links:
+
+                    link = link.split("?")[0]
+
+                    if link not in job.posts:
+                        job.posts.append(link)
+
+                log(f"Collected posts: {len(job.posts)}")
+
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(3)
+
+            browser.close()
 
     except Exception as e:
-        log(f"Scraper error: {e}")
 
-# =========================
+        log(f"Scraper error: {e}")# =========================
 # MEDIA FETCH
 # =========================
 
