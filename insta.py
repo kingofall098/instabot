@@ -1,241 +1,168 @@
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
-from telegram import ChatAction
-import threading
-import logging
-import re
-import os
-from instaloader import Instaloader, Post
-from dotenv import load_dotenv
+#RUNING CODE FOR INSTA DOWNLOAD
+import telebot
 import requests
+import time
+import random
 import json
-from datetime import datetime
-import pytz
-from telegram import ParseMode  # For safe formatting
-TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
+from bs4 import BeautifulSoup
 
-# Load environment variables
-load_dotenv()
+TOKEN = "8780791852:AAHqVZYRVc7QEyzCNxzAqIdfDCZuoMPZtYY"
 
-# Logger setup
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
+bot = telebot.TeleBot(TOKEN)
 
-# Telegram Bot Token
-TOKEN = "8756448611:AAHbnOlBbZP8639ZKHcFZd0vSQeK54EMSYQ"
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.instagram.com/"
+}
 
-# Instagram credentials
-USERNAME = os.getenv("INSTAGRAM_USERNAME")
-PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
+session = requests.Session()
+session.headers.update(headers)
+import re
+def clean_instagram_url(url):
+    return url.split("?")[0]
+def extract_shortcode(url):
 
-# File paths
-USERS_LOG_FILE = "users.log"
-ADMIN_FILE = "admin.json"
+    pattern = r"(?:reel|p)/([A-Za-z0-9_-]+)"
 
-# Instaloader setup
-loader = Instaloader()
+    match = re.search(pattern, url)
 
-# Session file path
-SESSION_FILE = f"{os.getcwd()}/session-{USERNAME}"
+    if match:
+        return match.group(1)
 
-session_lock = threading.Lock()
-
-def load_or_create_session():
-    with session_lock:
-        if os.path.exists(SESSION_FILE):
-            loader.load_session_from_file(USERNAME, filename=SESSION_FILE)
-        else:
-            loader.login(USERNAME, PASSWORD)
-            loader.save_session_to_file(SESSION_FILE)
-
-load_or_create_session()
-
-# Admin-related functions
-def get_admin():
-    if os.path.exists(ADMIN_FILE):
-        with open(ADMIN_FILE, "r") as file:
-            return json.load(file).get("admin_id")
     return None
+def debug(msg):
+    print(f"[DEBUG] {msg}")
 
-def set_admin(user_id):
-    if not os.path.exists(ADMIN_FILE):  # Set admin only once
-        with open(ADMIN_FILE, "w") as file:
-            json.dump({"admin_id": user_id}, file)
+@bot.message_handler(commands=['start'])
+def start(message):
 
-# User logging function
-def log_user_data(user):
-    # Get the current time in the server's timezone and convert it to Tashkent time
-    server_time = datetime.now()
-    tashkent_time = server_time.astimezone(TASHKENT_TZ)
-
-    user_data = {
-        "user_id": user.id,
-        "username": user.username,
-        "first_name": user.first_name,
-        "timestamp": tashkent_time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-    try:
-        # Read existing data
-        if os.path.exists(USERS_LOG_FILE):
-            with open(USERS_LOG_FILE, "r") as file:
-                users = json.load(file)
-        else:
-            users = []
-
-        # Update the timestamp if the user already exists
-        for existing_user in users:
-            if existing_user["user_id"] == user_data["user_id"]:
-                existing_user["timestamp"] = user_data["timestamp"]
-                break
-        else:
-            # Add new user if not found
-            users.append(user_data)
-
-        # Write updated data back to the file
-        with open(USERS_LOG_FILE, "w") as file:
-            json.dump(users, file, indent=4)
-
-    except Exception as e:
-        logger.error(f"Error logging user data: {e}")
-
-# Command to list users and total counts
-def list_users(update, context):
-    user = update.effective_user
-    admin_id = get_admin()
-
-    if user.id != admin_id:
-        update.message.reply_text("❌ You don't have permission to use this command.")
-        return
-
-    try:
-        if os.path.exists(USERS_LOG_FILE):
-            with open(USERS_LOG_FILE, "r") as file:
-                users = json.load(file)
-
-            if not users:
-                update.message.reply_text("No users have used the bot yet.")
-                return
-
-            # Calculate total users and users who used the bot today
-            total_users = len(users)
-            today_users = sum(
-                1 for u in users if datetime.strptime(u['timestamp'], "%Y-%m-%d %H:%M:%S").date() == datetime.now(TASHKENT_TZ).date()
-            )
-
-            # Preparing the response
-            response = f"📊 Total users: {total_users}\n"
-            response += f"🌍 Users who used today: {today_users}\n\n"
-            response += "📋 List of users who used the bot:\n\n"
-            for u in users:
-                response += (
-                    f"👤 User ID: {u['user_id']}\n"
-                    f"   Username: @{u['username'] or 'N/A'}\n"
-                    f"   First Name: {u['first_name']}\n"
-                    f"   Last Active: {u['timestamp']}\n\n"
-                )
-            update.message.reply_text(response)
-        else:
-            update.message.reply_text("No user log file found. No users have used the bot yet.")
-    except Exception as e:
-        logger.error(f"Error reading user log file: {e}")
-        update.message.reply_text("⚠️ An error occurred while retrieving user data.")
-
-
-# Helper functions
-def extract_shortcode(instagram_post):
-    match = re.search(r"instagram\.com/(?:p|reel|tv)/([^/?#&]+)", instagram_post)
-    return match.group(1) if match else None
-
-def is_valid_instagram_url(url):
-    return bool(re.match(r"https?://(www\.)?instagram\.com/(p|reel|tv)/", url))
-
-def fetch_instagram_data(instagram_post):
-    shortcode = extract_shortcode(instagram_post)
-    if not shortcode:
-        return None
-
-    try:
-        post = Post.from_shortcode(loader.context, shortcode)
-        return post.video_url if post.is_video else post.url
-    except Exception as e:
-        logger.error(f"Error fetching Instagram data: {e}")
-        return None
-
-# Command: Start
-def start(update, context):
-    user = update.effective_user
-    log_user_data(user)
-
-    if get_admin() is None:
-        set_admin(user.id)
-        update.message.reply_text("👑 You have been set as the admin!")
-
-    update.message.reply_text(
-        "👋 Welcome to the Instagram Saver Bot!\n\n"
-        "📩 Send me any **public** Instagram link (post, reel, or IGTV), and I'll fetch the media for you.\n"
-        "⚠️ Make sure the post is **public** and not private.\n\n"
-        "Happy downloading! 🎉"
+    bot.reply_to(
+        message,
+        "Send an Instagram link and I will download the media."
     )
 
-# Handle: Download with Threading
-def download(update, context):
-    thread = threading.Thread(target=process_download, args=(update, context))
-    thread.start()
+import yt_dlp
+import requests
+import os
+import uuid
+from bs4 import BeautifulSoup
 
-def process_download(update, context):
-    user = update.effective_user
-    log_user_data(user)
+def get_media(url):
 
-    instagram_post = update.effective_message.text.strip()
-    if not is_valid_instagram_url(instagram_post):
-        update.message.reply_text("❌ Invalid Instagram URL. Please send a valid post, Reel, or IGTV link.")
-        return
+    url = clean_instagram_url(url)
 
-    update.message.reply_chat_action(ChatAction.TYPING)
-    progress_message = update.message.reply_text("⏳ Fetching your media...")
+    debug(f"Downloading with yt-dlp: {url}")
 
-    media_url = fetch_instagram_data(instagram_post)
-    if not media_url:
-        progress_message.edit_text("❌ Failed to fetch media. Ensure the post is public and try again.")
-        return
+    folder = "downloads"
+    os.makedirs(folder, exist_ok=True)
 
-    file_name = f"temp_{update.message.chat_id}.mp4" if "video" in media_url else f"temp_{update.message.chat_id}.jpg"
+    filename = os.path.join(folder, str(uuid.uuid4()))
+
     try:
-        response = requests.get(media_url, stream=True)
-        response.raise_for_status()
-        with open(file_name, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024):
-                f.write(chunk)
 
-        with open(file_name, "rb") as file:
-            if "video" in media_url:
-                context.bot.send_video(chat_id=update.message.chat_id, video=file, caption="👾 Powered by @Instasave_downloader_bot")
-            else:
-                context.bot.send_photo(chat_id=update.message.chat_id, photo=file, caption="👾 Powered by @Instasave_downloader_bot")
+        ydl_opts = {
+            "quiet": True,
+            "cookiefile": "cookies.txt",
+            "ignoreerrors": True
+        }
 
-        progress_message.delete()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+
+            info = ydl.extract_info(url, download=True)
+
+            if info:
+
+                if "entries" in info:
+                    files = []
+                    for e in info["entries"]:
+                        files.append(ydl.prepare_filename(e))
+                    return files
+                else:
+                    return [ydl.prepare_filename(info)]
+
     except Exception as e:
-        logger.error(f"Error sending media: {e}")
-        progress_message.edit_text("❌ Failed to send media. Please try again later.")
-    finally:
-        if os.path.exists(file_name):
-            os.remove(file_name)
+        debug(f"yt-dlp failed: {e}")
 
-# Main function
-def main():
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
+    # -------- fallback method --------
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("users", list_users))  # Add /users command
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, download))
+    debug("Trying fallback extraction")
 
-    updater.start_polling()
-    logger.info("Bot started and polling for updates...")
-    updater.idle()
+    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
 
-if __name__ == "__main__":
-    main()
+    debug(f"Page status: {r.status_code}")
+
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    video = soup.find("meta", property="og:video")
+    image = soup.find("meta", property="og:image")
+
+    files = []
+
+    if video:
+
+        debug("Found video in meta tags")
+
+        media_url = video["content"]
+        path = filename + ".mp4"
+
+    elif image:
+
+        debug("Found image in meta tags")
+
+        media_url = image["content"]
+        path = filename + ".jpg"
+
+    else:
+
+        debug("No media meta tags found")
+        return None
+
+    debug(f"Downloading media: {media_url}")
+
+    data = requests.get(media_url).content
+
+    with open(path, "wb") as f:
+        f.write(data)
+
+    debug("Media downloaded successfully")
+
+    files.append(path)
+
+    return files
+@bot.message_handler(func=lambda m: m.text and "instagram.com" in m.text)
+def download(message):
+
+    debug("User sent Instagram link")
+
+    bot.reply_to(message, "Downloading media...")
+
+    media = get_media(message.text)
+
+    if not media:
+        bot.reply_to(message, "Could not download media.")
+        return
+
+    for file in media:
+
+        if not os.path.exists(file):
+            continue
+
+        if file.endswith(".mp4"):
+            bot.send_video(message.chat.id, open(file, "rb"))
+        else:
+            bot.send_photo(message.chat.id, open(file, "rb"))
+print("Bot running...")
+
+bot.remove_webhook()
+
+while True:
+
+    try:
+
+        bot.infinity_polling(skip_pending=True)
+
+    except Exception as e:
+
+        print("Polling error:", e)
+        time.sleep(5)
