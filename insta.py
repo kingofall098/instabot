@@ -177,7 +177,7 @@ def fetch_media(post_url):
     try:
 
         headers = {
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             "Accept-Language": "en-US,en;q=0.9"
         }
 
@@ -185,20 +185,17 @@ def fetch_media(post_url):
 
         html = r.text
 
-        match = re.search(r'__additionalDataLoaded\([^,]+,(.*)\);</script>', html)
+        # video
+        video = re.search(r'property="og:video" content="([^"]+)"', html)
 
-        if not match:
-            return None, None
+        if video:
+            return "video", video.group(1)
 
-        data = json.loads(match.group(1))
+        # photo
+        image = re.search(r'property="og:image" content="([^"]+)"', html)
 
-        media = data["items"][0]
-
-        if media.get("video_versions"):
-            return "video", media["video_versions"][0]["url"]
-
-        if media.get("image_versions2"):
-            return "photo", media["image_versions2"]["candidates"][0]["url"]
+        if image:
+            return "photo", image.group(1)
 
         return None, None
 
@@ -206,7 +203,6 @@ def fetch_media(post_url):
 
         log(f"Media error: {e}")
         return None, None
-
 # =========================
 # START COMMAND
 # =========================
