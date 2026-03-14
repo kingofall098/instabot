@@ -313,17 +313,23 @@ def send_next(call):
 
             content = response.body()
 
-            if len(content) < 1000:
-                raise Exception("Media file too small")
-
-            file = BytesIO(content)
 
             if media_type == "video":
+
+                file = BytesIO(content)
                 file.name = "video.mp4"
                 bot.send_video(call.message.chat.id, file)
 
             elif media_type == "photo":
-                file.name = "photo.jpg"
+
+                from PIL import Image
+
+                img = Image.open(BytesIO(content)).convert("RGB")
+
+                file = BytesIO()
+                img.save(file, format="JPEG")
+                file.seek(0)
+
                 bot.send_photo(call.message.chat.id, file)
 
         except Exception as e:
