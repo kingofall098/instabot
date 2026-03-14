@@ -298,60 +298,43 @@ def send_next(call):
             bot.send_message(call.message.chat.id, post_url)
             continue
 
+        from io import BytesIO
+        from PIL import Image
+
+        media_url = media_url.replace("&amp;", "&")
+        media_url = media_url.replace(".heic", ".jpg")
+
+        log(f"Final media URL: {media_url}")
+
         try:
 
-            from io import BytesIO
-            from PIL import Image
-            import requests
+            # open media using the logged-in browser
+            page = browser.new_page()
 
-            media_url = media_url.replace("&amp;", "&")
-            media_url = media_url.replace(".heic", ".jpg")
+            response = page.goto(media_url, timeout=60000)
 
-            log(f"Final media URL: {media_url}")
+            if not response:
+                raise Exception("No response from CDN")
 
-            # get ALL cookies from Playwright browser session
-            cookie_list = browser.cookies()
+            content = response.body()
 
-            cookies = {}
-            for c in cookie_list:
-                cookies[c["name"]] = c["value"]
-
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                "Referer": post_url,
-                "Origin": "https://www.instagram.com",
-                "Accept": "*/*",
-            }
-
-            response = requests.get(
-                media_url,
-                headers=headers,
-                cookies=cookies,
-                timeout=30
-            )
-
-            print("Download status:", response.status_code)
-
-            if response.status_code != 200:
-                raise Exception(f"Download failed {response.status_code}")
-
-            content = response.content
+            file = BytesIO(content)
 
             if media_type == "video":
-
-                file = BytesIO(content)
                 file.name = "video.mp4"
                 bot.send_video(call.message.chat.id, file)
 
             elif media_type == "photo":
 
-                img = Image.open(BytesIO(content)).convert("RGB")
+                img = Image.open(file).convert("RGB")
 
-                file = BytesIO()
-                img.save(file, format="JPEG")
-                file.seek(0)
+                jpeg = BytesIO()
+                img.save(jpeg, format="JPEG")
+                jpeg.seek(0)
 
-                bot.send_photo(call.message.chat.id, file)
+                bot.send_photo(call.message.chat.id, jpeg)
+
+            page.close()
 
         except Exception as e:
 
