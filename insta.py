@@ -177,7 +177,7 @@ def fetch_media(post_url):
     try:
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "User-Agent": "Mozilla/5.0",
             "Accept-Language": "en-US,en;q=0.9"
         }
 
@@ -185,9 +185,20 @@ def fetch_media(post_url):
 
         html = r.text
 
+        # extract JSON from page
+        match = re.search(r'__additionalDataLoaded\([^,]+,(.*)\);</script>', html)
+
+        if not match:
+            log("JSON not found")
+            return []
+
+        data = json.loads(match.group(1))
+
         media = data["items"][0]
 
+        # --------------------
         # CAROUSEL
+        # --------------------
         if "carousel_media" in media:
 
             items = []
@@ -203,18 +214,25 @@ def fetch_media(post_url):
             return items
 
 
-        # SINGLE VIDEO
+        # --------------------
+        # VIDEO
+        # --------------------
         if media.get("video_versions"):
             return [("video", media["video_versions"][0]["url"])]
 
-        # SINGLE PHOTO
+
+        # --------------------
+        # PHOTO
+        # --------------------
         if media.get("image_versions2"):
             return [("photo", media["image_versions2"]["candidates"][0]["url"])]
+
+        return []
 
     except Exception as e:
 
         log(f"Media error: {e}")
-        return None, None
+        return []
 # =========================
 # START COMMAND
 # =========================
@@ -294,66 +312,67 @@ def send_next(call):
         return
 
     from io import BytesIO
-
-    # use existing browser context
-    context = browser
+    from PIL import Image
 
     for post_url in posts:
 
-        media_type, media_url = fetch_media(post_url)
+        medias = fetch_media(post_url)
 
-        log(f"Checking post: {post_url}")
-        log(f"Media type: {media_type}")
-        log(f"Media URL: {media_url}")
-
-        if not media_url:
+        if not medias:
             bot.send_message(call.message.chat.id, post_url)
             continue
 
-        from io import BytesIO
-        from PIL import Image
+        for media_type, media_url in medias:
 
-        media_url = media_url.replace("&amp;", "&")
-        media_url = media_url.replace(".heic", ".jpg")
+            log(f"Checking post: {post_url}")
+            log(f"Media type: {media_type}")
+            log(f"Media URL: {media_url}")
 
-        log(f"Final media URL: {media_url}")
+            if not media_url:
+                bot.send_message(call.message.chat.id, post_url)
+                continue
 
-        try:
+            media_url = media_url.replace("&amp;", "&")
+            media_url = media_url.replace(".heic", ".jpg")
 
-            # open media using the logged-in browser
-            page = browser.new_page()
+            log(f"Final media URL: {media_url}")
 
-            response = page.goto(media_url, timeout=60000)
+            try:
 
-            if not response:
-                raise Exception("No response from CDN")
+                page = browser.new_page()
 
-            content = response.body()
+                response = page.goto(media_url, timeout=60000)
 
-            file = BytesIO(content)
+                if not response:
+                    raise Exception("No response from CDN")
 
-            if media_type == "video":
-                file.name = "video.mp4"
-                bot.send_video(call.message.chat.id, file)
+                content = response.body()
 
-            elif media_type == "photo":
+                file = BytesIO(content)
 
-                img = Image.open(file).convert("RGB")
+                if media_type == "video":
 
-                jpeg = BytesIO()
-                img.save(jpeg, format="JPEG")
-                jpeg.seek(0)
+                    file.name = "video.mp4"
+                    bot.send_video(call.message.chat.id, file)
 
-                bot.send_photo(call.message.chat.id, jpeg)
+                elif media_type == "photo":
 
-            page.close()
+                    img = Image.open(file).convert("RGB")
 
-        except Exception as e:
+                    jpeg = BytesIO()
+                    img.save(jpeg, format="JPEG")
+                    jpeg.seek(0)
 
-            log(f"Telegram error: {e}")
-            bot.send_message(call.message.chat.id, post_url)
+                    bot.send_photo(call.message.chat.id, jpeg)
 
-        time.sleep(random.uniform(1.5, 3))
+                page.close()
+
+            except Exception as e:
+
+                log(f"Telegram error: {e}")
+                bot.send_message(call.message.chat.id, post_url)
+
+            time.sleep(random.uniform(1.5, 3))
 
     job.sent += len(posts)
 
