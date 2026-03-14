@@ -91,10 +91,18 @@ def scrape_background(job):
 
             browser = p.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled"]
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage"
+                ]
             )
 
-            context = browser.new_context()
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                viewport={"width":1280,"height":800},
+                locale="en-US"
+            )
 
             # add instagram session cookie
             context.add_cookies([{
@@ -111,6 +119,11 @@ def scrape_background(job):
 
             url = f"https://www.instagram.com/{username}/"
 
+            delay = random.uniform(4,7)
+            print("Delay:", delay)
+            time.sleep(delay)
+
+            url = f"https://www.instagram.com/{username}/"
             page.goto(url, wait_until="domcontentloaded")
 
             time.sleep(5)
@@ -120,10 +133,16 @@ def scrape_background(job):
             if "login" in page.url:
                 log("Instagram redirected to login")
                 return
-
+            if "suspended" in page.url:
+                log("instagram block the session")
+                return
+            
             page.wait_for_selector("article", timeout=30000)
 
-            while job.running:
+            for _ in range(20):
+
+                if not job.running:
+                    break
 
                 links = page.evaluate("""
                     Array.from(document.querySelectorAll("article a"))
@@ -137,7 +156,7 @@ def scrape_background(job):
                     if link not in job.posts:
                         job.posts.append(link)
 
-                log(f"Collected posts: {len(job.posts)}")
+                print("Collected posts:", len(job.posts))
 
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 time.sleep(3)
@@ -316,3 +335,4 @@ def send_next(call):
 print("Bot started")
 
 bot.infinity_polling()
+
