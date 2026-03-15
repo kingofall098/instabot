@@ -16,7 +16,7 @@ import instaloader
 # BOT TOKEN
 # =========================
 
-TOKEN = "8665521420:AAHi0hfMNn3odVDCd9ajMCW_8FwrSz2OQLQ"
+TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN, threaded=True)
 from queue import Queue
 user_jobs ={}
@@ -167,7 +167,10 @@ def scrape_background(job, context):
 
         page.goto(url, wait_until="domcontentloaded")
 
-        time.sleep(5)
+        # wait for posts grid
+        page.wait_for_selector('a[href^="/p/"], a[href^="/reel/"]', timeout=15000)
+
+        time.sleep(2)
 
         log(f"Current URL: {page.url}")
         if "challenge" in page.url:
@@ -185,14 +188,9 @@ def scrape_background(job, context):
         # small delay for JS rendering
         time.sleep(3)
 
-        # scroll once to trigger posts loading
-        page.evaluate("""
-        window.scrollBy({
-            top: 800,
-            left: 0,
-            behavior: 'smooth'
-        });
-        """)
+        # trigger lazy loading
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(3)
         time.sleep(random.uniform(4,6))
 
         for _ in range(20):
@@ -201,9 +199,8 @@ def scrape_background(job, context):
                 break
             log("Scanning page for posts...")
             links = page.evaluate("""
-                Array.from(document.querySelectorAll('a[href^="/p/"], a[href^="/reel/"]'))
-                    .map(a => a.href)
-                    .filter(h => h.includes('/p/') || h.includes('/reel/'))
+            Array.from(document.querySelectorAll('a[href^="/p/"], a[href^="/reel/"]'))
+            .map(a => "https://www.instagram.com" + a.getAttribute("href"))
             """)
 
             new_posts = 0
