@@ -21,7 +21,7 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 # INSTAGRAM SESSION
 # =========================
 
-IG_SESSIONID = "80454330558%3AgyVmoDRy4c8pBj%3A10%3AAYiQ7rgvA8jCZ_WEFR54X9TEPmj2mRs1s_cM8Mfghg"
+# IG_SESSIONID = "80454330558%3AgyVmoDRy4c8pBj%3A10%3AAYiQ7rgvA8jCZ_WEFR54X9TEPmj2mRs1s_cM8Mfghg"
 
 # =========================
 # JOB SYSTEM
@@ -43,7 +43,23 @@ user_jobs = {}
 def log(msg):
     t = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{t}] {msg}")
+    
+# SESSION FUNCTION
+def load_session_from_cookie():
 
+    with open("cookies.txt", "r") as f:
+        for line in f:
+            if "sessionid" in line:
+
+                parts = line.strip().split("\t")
+                session = parts[-1]
+
+                log(f"Loaded session: {session[:15]}...")
+                return session
+
+    raise Exception("sessionid not found in cookies.txt")
+
+IG_SESSIONID = load_session_from_cookie()
 # =========================
 # START PLAYWRIGHT
 # =========================
@@ -77,16 +93,7 @@ context.add_cookies([{
 page = context.new_page()
 
 # visit instagram so cookie activates
-page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
-
-# Open a page
-page = context.new_page()
-
-# Visit Instagram so the saved session loads
-page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
-
-# Reload so session activates
-# page.reload()
+page.goto("https://www.instagram.com/")
 
 # =========================
 # SCRAPER
@@ -99,7 +106,7 @@ def scrape_background(job):
 
     try:
 
-        page = browser.new_page()
+        page = context.new_page()
 
         url = f"https://www.instagram.com/{username}/"
 
