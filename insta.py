@@ -239,22 +239,20 @@ def scrape_background(job, context):
     
     try:
         #create new page
-        page = context.new_page() 
+        page = context.new_page()
 
-        #build profile url
         url = f"https://www.instagram.com/{username}/"
 
-        
-        #open profile
-        page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
-        time.sleep(3)
+        for attempt in range(3):
 
-        page.goto(url, wait_until="domcontentloaded")
+            try:
+                page.goto(url, wait_until="networkidle")
+                page.wait_for_selector("header, main, article", timeout=20000)
+                break
 
-        time.sleep(3)
-
-        # wait for instagram app container
-        page.wait_for_selector("main", timeout=30000)
+            except:
+                log("Retry loading profile...")
+                time.sleep(5)
 
         log("Main container loaded")
 
