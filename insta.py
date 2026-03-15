@@ -64,28 +64,33 @@ def get_user_posts(username):
     html = r.text
 
     try:
-        # Instagram embeds profile JSON in this script block
-        match = re.search(r'window\._sharedData = (.*?);</script>', html)
 
-        if not match:
-            print("Could not find sharedData")
-            return []
+        # find JSON script blocks
+        scripts = re.findall(r'<script type="application/json">(.*?)</script>', html)
 
-        data = json.loads(match.group(1))
-
-        edges = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
-
-        print("Edges found:", len(edges))
+        print("JSON script blocks found:", len(scripts))
 
         posts = []
 
-        for edge in edges:
+        for script in scripts:
 
-            shortcode = edge["node"]["shortcode"]
+            data = json.loads(script)
 
-            posts.append(
-                f"https://www.instagram.com/p/{shortcode}/"
-            )
+            if "graphql" in str(data):
+
+                edges = data["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
+
+                print("Edges found:", len(edges))
+
+                for edge in edges:
+
+                    shortcode = edge["node"]["shortcode"]
+
+                    post_url = f"https://www.instagram.com/p/{shortcode}/"
+
+                    posts.append(post_url)
+
+                break
 
         print("Collected posts:", len(posts))
 
@@ -94,9 +99,7 @@ def get_user_posts(username):
     except Exception as e:
 
         print("Parsing error:", e)
-
         return []
-
 # =========================
 # GET MEDIA
 # =========================
