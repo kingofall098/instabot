@@ -116,11 +116,6 @@ L = instaloader.Instaloader(
     save_metadata=False
 )
 
-L.context._session.cookies.set(
-    "sessionid",
-    IG_SESSIONID,
-    domain=".instagram.com"
-)
 print("Instaloader session active")
 # =========================
 # START PLAYWRIGHT
