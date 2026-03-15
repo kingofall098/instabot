@@ -38,61 +38,57 @@ user_jobs = {}
 # GET POSTS
 # =========================
 import requests
-import re
 
 def get_user_posts(username):
 
     print("\n=== FETCHING PROFILE ===")
     print("Username:", username)
 
-    url = f"https://www.instagram.com/{username}/"
+    url = "https://www.instagram.com/graphql/query/"
 
     headers = {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "X-IG-App-ID": "936619743392459",
+        "Accept": "*/*",
+        "Referer": f"https://www.instagram.com/{username}/"
     }
-
-    r = requests.get(url, headers=headers)
-
-    print("Status code:", r.status_code)
-
-    html = r.text
-
-    # Extract user ID
-    match = re.search(r'"profilePage_(\d+)"', html)
-
-    if not match:
-        print("User ID not found")
-        return []
-
-    user_id = match.group(1)
-
-    print("User ID:", user_id)
-
-    # GraphQL query
-    graphql_url = "https://www.instagram.com/graphql/query/"
 
     params = {
-        "query_hash": "58b6785bea111c67129decbe6a448951",
-        "variables": f'{{"id":"{user_id}","first":12}}'
+        "doc_id": "8845758582119845",
+        "variables": f'{{"username":"{username}","first":12}}'
     }
 
-    r = requests.get(graphql_url, params=params, headers=headers)
+    r = requests.get(url, headers=headers, params=params)
 
     print("GraphQL status:", r.status_code)
 
+    if r.status_code != 200:
+        print("GraphQL request failed")
+        return []
+
     data = r.json()
+
+    print("Keys returned:", list(data.keys()))
 
     posts = []
 
-    edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
+    try:
 
-    print("Edges found:", len(edges))
+        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
-    for edge in edges:
+        print("Edges found:", len(edges))
 
-        shortcode = edge["node"]["shortcode"]
+        for edge in edges:
 
-        posts.append(f"https://www.instagram.com/p/{shortcode}/")
+            shortcode = edge["node"]["shortcode"]
+
+            post_url = f"https://www.instagram.com/p/{shortcode}/"
+
+            posts.append(post_url)
+
+    except Exception as e:
+
+        print("Parsing error:", e)
 
     print("Collected posts:", len(posts))
 
