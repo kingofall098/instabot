@@ -8,7 +8,18 @@ TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 
 bot = telebot.TeleBot(TOKEN)
 
-SESSIONID = open("cookies.txt").read().strip()
+def load_session():
+    text = open("cookies.txt").read()
+
+    for line in text.splitlines():
+        if "sessionid" in line and "\t" in line:
+            return line.split("\t")[-1].strip()
+
+    return text.strip()
+
+SESSIONID = load_session()
+
+print("Loaded session:", SESSIONID[:15], "...")
 
 print("Loaded session:", SESSIONID[:10], "...")
 
