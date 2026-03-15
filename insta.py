@@ -18,7 +18,9 @@ import instaloader
 
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN, threaded=True)
+from queue import Queue
 
+job_queue = Queue()
 # =========================
 # INSTAGRAM SESSION
 # =========================
@@ -31,6 +33,8 @@ bot = telebot.TeleBot(TOKEN, threaded=True)
 # =========================
 # LOG FUNCTION
 # =========================
+
+
 
 def log(msg):
     t = datetime.datetime.now().strftime("%H:%M:%S")
@@ -345,7 +349,14 @@ def start(message):
         message.chat.id,
         "Send Instagram username"
     )
-
+class Job:
+    def __init__(self, username):
+        self.username = username
+        self.posts = []
+        self.sent = 0
+        self.running = True
+user_jobs ={}
+job_queue = Queue()
 # =========================
 # USERNAME HANDLER
 # =========================
@@ -505,4 +516,3 @@ threading.Thread(
 ).start()
 
 bot.infinity_polling()
-
