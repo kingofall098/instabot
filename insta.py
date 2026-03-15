@@ -53,7 +53,7 @@ print("Starting browser...")
 play = sync_playwright().start()
 
 # Launch persistent browser profile
-browser = play.chromium.launch_persistent_context(
+browser = play.chromium.launch_persistent_browser(
     user_data_dir="./ig_profile",
     headless=True,
     args=[
@@ -83,7 +83,7 @@ def scrape_background(job):
 
     try:
 
-        page = context.new_page()
+        page = browser.new_page()
 
         url = f"https://www.instagram.com/{username}/"
 
