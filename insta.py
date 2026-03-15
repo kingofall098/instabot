@@ -400,6 +400,11 @@ def scrape_background(job, context):
             current_height = page.evaluate("document.body.scrollHeight")
 
             if current_height == previous_height:
+                no_change_count += 1
+            else:
+                no_change_count = 0
+
+            if no_change_count >= 3:
                 log("No more posts loading")
                 break
 
@@ -434,6 +439,8 @@ def playwright_worker():
             viewport={"width": 1280, "height": 900}
         )
         load_cookies(context)
+        page.goto("https://www.instagram.com/accounts/edit/")
+        print("Current URL:", page.url)
         print(context.cookies())
 
     #     context.add_cookies([
@@ -701,6 +708,7 @@ def send_next(call):
         f"Sent {job.sent} posts",
         reply_markup=markup
     )
+
 # =========================
 # RUN BOT
 # =========================
