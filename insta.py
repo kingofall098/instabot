@@ -38,6 +38,7 @@ user_jobs = {}
 # GET POSTS
 # =========================
 import requests
+import json
 
 def get_user_posts(username):
 
@@ -47,7 +48,7 @@ def get_user_posts(username):
     url = "https://www.instagram.com/graphql/query/"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "User-Agent": "Mozilla/5.0",
         "X-IG-App-ID": "936619743392459",
         "Accept": "*/*",
         "Referer": f"https://www.instagram.com/{username}/"
@@ -62,33 +63,26 @@ def get_user_posts(username):
 
     print("GraphQL status:", r.status_code)
 
-    if r.status_code != 200:
-        print("GraphQL request failed")
-        return []
-
     data = r.json()
 
-    print("Keys returned:", list(data.keys()))
+    print("Full response preview:")
+    print(json.dumps(data, indent=2)[:500])
+
+    if not data.get("data"):
+        print("Instagram returned no data")
+        return []
 
     posts = []
 
-    try:
+    edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
-        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
+    print("Edges found:", len(edges))
 
-        print("Edges found:", len(edges))
+    for edge in edges:
 
-        for edge in edges:
+        shortcode = edge["node"]["shortcode"]
 
-            shortcode = edge["node"]["shortcode"]
-
-            post_url = f"https://www.instagram.com/p/{shortcode}/"
-
-            posts.append(post_url)
-
-    except Exception as e:
-
-        print("Parsing error:", e)
+        posts.append(f"https://www.instagram.com/p/{shortcode}/")
 
     print("Collected posts:", len(posts))
 
