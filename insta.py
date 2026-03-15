@@ -39,7 +39,6 @@ user_jobs = {}
 # =========================
 import requests
 import re
-import json
 
 def get_user_posts(username):
 
@@ -49,57 +48,40 @@ def get_user_posts(username):
     url = f"https://www.instagram.com/{username}/"
 
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.instagram.com/",
+        "Cookie": f"sessionid={SESSIONID}"
     }
 
     r = requests.get(url, headers=headers)
 
     print("Status code:", r.status_code)
 
-    if r.status_code != 200:
-        print("Profile request failed")
-        return []
-
     html = r.text
 
-    try:
+    print("HTML length:", len(html))
 
-        # find JSON script blocks
-        scripts = re.findall(r'<script type="application/json">(.*?)</script>', html)
+    # DEBUG
+    print("HTML preview:", html[:500])
 
-        print("JSON script blocks found:", len(scripts))
+    shortcodes = re.findall(r'"shortcode":"(.*?)"', html)
 
-        posts = []
+    print("Shortcodes found:", len(shortcodes))
 
-        for script in scripts:
+    posts = []
 
-            data = json.loads(script)
+    for code in shortcodes:
 
-            if "graphql" in str(data):
+        url = f"https://www.instagram.com/p/{code}/"
 
-                edges = data["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
+        if url not in posts:
+            posts.append(url)
 
-                print("Edges found:", len(edges))
+    print("Collected posts:", len(posts))
 
-                for edge in edges:
-
-                    shortcode = edge["node"]["shortcode"]
-
-                    post_url = f"https://www.instagram.com/p/{shortcode}/"
-
-                    posts.append(post_url)
-
-                break
-
-        print("Collected posts:", len(posts))
-
-        return posts
-
-    except Exception as e:
-
-        print("Parsing error:", e)
-        return []
+    return posts
 # =========================
 # GET MEDIA
 # =========================
