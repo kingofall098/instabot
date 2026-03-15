@@ -110,10 +110,16 @@ def scrape_background(job):
         time.sleep(3)
 
         # scroll once to trigger posts loading
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(3)
+        page.evaluate("""
+        window.scrollBy({
+            top: 800,
+            left: 0,
+            behavior: 'smooth'
+        });
+        """)
+        time.sleep(random.uniform(4,6))
 
-        for _ in range(15):
+        for _ in range(40):
 
             if not job.running:
                 break
@@ -124,14 +130,16 @@ def scrape_background(job):
                     .filter(h => h.includes('/p/') || h.includes('/reel/'))
             """)
 
-            for link in links:
+            new_posts = 0
 
+            for link in links:
                 link = link.split("?")[0]
 
                 if link not in job.posts:
                     job.posts.append(link)
+                    new_posts += 1
 
-            log(f"Collected posts: {len(job.posts)}")
+            log(f"Collected posts: {len(job.posts)} (+{new_posts})")
 
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
