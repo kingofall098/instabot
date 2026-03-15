@@ -347,14 +347,24 @@ def scrape_background(job, context):
 
         previous_height = 0
 
+        previous_height = 0
+        no_change_count = 0
+
         for _ in range(20):
 
             if not job.running:
                 break
 
-            # scroll first
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(random.uniform(4,6))
+            # progressive human-like scroll
+            page.evaluate("""
+            window.scrollBy({
+                top: 1200,
+                left: 0,
+                behavior: 'smooth'
+            });
+            """)
+
+            time.sleep(random.uniform(3,5))
 
             log("Scanning page for posts...")
 
@@ -391,6 +401,22 @@ def scrape_background(job, context):
                             message_id=job.message_id,
                             reply_markup=markup
                         )
+
+            log(f"Collected posts: {len(job.posts)} (+{new_posts})")
+
+            # detect if page stopped loading posts
+            current_height = page.evaluate("document.body.scrollHeight")
+
+            if current_height == previous_height:
+                no_change_count += 1
+            else:
+                no_change_count = 0
+
+            if no_change_count >= 3:
+                log("No more posts loading")
+                break
+
+            previous_height = current_height
 
             log(f"Collected posts: {len(job.posts)} (+{new_posts})")
             previous_height = 0
