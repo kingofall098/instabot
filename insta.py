@@ -252,7 +252,12 @@ def profile_handler(message):
     job = Job(username)
     user_jobs[message.chat.id] = job
 
-    scrape_background(job)
+    # start scraper in background
+    threading.Thread(
+        target=scrape_background,
+        args=(job,),
+        daemon=True
+    ).start()
 
     markup = InlineKeyboardMarkup()
 
@@ -297,9 +302,9 @@ def send_next(call):
     end = start + 10
     posts = job.posts[start:end]
 
-    if not posts:
-        bot.send_message(call.message.chat.id, "Still collecting posts...")
-        return
+    # if not posts:
+    #     bot.send_message(call.message.chat.id, "Still collecting posts...")
+    #     return
 
     from io import BytesIO
     from PIL import Image
