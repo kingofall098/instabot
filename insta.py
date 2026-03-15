@@ -64,7 +64,7 @@ browser = play.chromium.launch_persistent_context(
 )
 
 # Open a page
-page = browser.new_context()
+page = browser.new_page()
 
 # Visit Instagram so the saved session loads
 page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
