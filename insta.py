@@ -35,7 +35,44 @@ job_queue = Queue()
 # =========================
 
 
+def detect_instagram_state(page):
 
+    url = page.url
+    title = page.title()
+
+    try:
+        body = page.inner_text("body")
+    except:
+        body = ""
+
+    log(f"Page URL: {url}")
+    log(f"Page title: {title}")
+
+    # LOGIN WALL
+    if "accounts/login" in url or "Log in" in body:
+        return "LOGIN_REQUIRED"
+
+    # SESSION EXPIRED
+    if "Please log in" in body:
+        return "SESSION_EXPIRED"
+
+    # CHALLENGE / CHECKPOINT
+    if "challenge" in url or "checkpoint" in url:
+        return "CHALLENGE"
+
+    # RATE LIMIT
+    if "Try again later" in body or "Please wait a few minutes" in body:
+        return "RATE_LIMIT"
+
+    # PROFILE NOT FOUND
+    if "Sorry, this page isn't available" in body:
+        return "PROFILE_NOT_FOUND"
+
+    # EMPTY PAGE / SELECTOR MISSING
+    if "<article" not in page.content():
+        return "EMPTY_PAGE"
+
+    return "OK"
 def log(msg):
     t = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{t}] {msg}")
@@ -166,9 +203,52 @@ def scrape_background(job, context):
         time.sleep(delay)
 
         page.goto(url, wait_until="domcontentloaded")
+        time.sleep(3)
+
+        log("Page title: " + page.title())
+
+        html_preview = page.content()[:1000]
+        log("HTML preview:")
+        log(html_preview)
+
+        state = detect_instagram_state(page)
+
+        if state != "OK":
+
+            log(f"Instagram state detected: {state}")
+
+            if state == "LOGIN_REQUIRED":
+                log("Instagram forced login wall")
+
+            elif state == "CHALLENGE":
+                log("Instagram checkpoint challenge triggered")
+
+            elif state == "RATE_LIMIT":
+                log("Instagram soft block detected")
+
+            elif state == "PROFILE_NOT_FOUND":
+                log("Profile does not exist")
+
+            page.close()
+            return
 
         # wait for posts grid
-        page.wait_for_selector("article", timeout=20000)
+        try:
+            page.wait_for_selector("article", timeout=20000)
+
+        except Exception as e:
+
+            log("Post grid not detected")
+
+            html_preview = page.content()[:1000]
+            log("HTML preview:")
+            log(html_preview)
+
+            state = detect_instagram_state(page)
+            log(f"Page diagnostic result: {state}")
+
+            page.close()
+            return
 
         time.sleep(2)
 
