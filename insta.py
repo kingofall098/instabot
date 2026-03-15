@@ -1,364 +1,163 @@
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from playwright.sync_api import sync_playwright
-import threading
 import requests
-import datetime
+import re
 import time
 import random
-import re
-import json
-from io import BytesIO
+
 # =========================
 # BOT TOKEN
 # =========================
 
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
-bot = telebot.TeleBot(TOKEN, threaded=False)
+
+bot = telebot.TeleBot(TOKEN)
 
 # =========================
 # INSTAGRAM SESSION
 # =========================
 
-IG_SESSIONID = "45575449095%3APTeNL8atjbF3Xs%3A9%3AAYhrp2AO-1Qn_PzdwHGe5QXpaBpzTh6oWBakuGsjlQ"
+SESSIONID = open("session.txt").read().strip()
 
 # =========================
-# JOB SYSTEM
+# GET INSTAGRAM POSTS
 # =========================
 
-class Job:
-    def __init__(self, username):
-        self.username = username
-        self.posts = []
-        self.sent = 0
-        self.running = True
+def get_user_posts(username):
 
-user_jobs = {}
+    url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}"
 
-# =========================
-# LOG FUNCTION
-# =========================
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "x-ig-app-id": "936619743392459",
+        "cookie": f"sessionid={SESSIONID}"
+    }
 
-def log(msg):
-    t = datetime.datetime.now().strftime("%H:%M:%S")
-    print(f"[{t}] {msg}")
+    r = requests.get(url, headers=headers)
 
-# =========================
-# START PLAYWRIGHT
-# =========================
-
-print("Starting browser...")
-
-play = sync_playwright().start()
-
-browser = play.chromium.launch_persistent_context(
-    user_data_dir="./ig_profile",
-    headless=True,
-    args=["--disable-blink-features=AutomationControlled"]
-)
-
-page = browser.new_page()
-
-# open instagram first
-page.goto("https://www.instagram.com")
-
-# add session cookie
-browser.add_cookies([{
-    "name": "sessionid",
-    "value": IG_SESSIONID,
-    "domain": ".instagram.com",
-    "path": "/",
-    "httpOnly": True,
-    "secure": True,
-    "sameSite": "None"
-}])
-
-# reload so session activates
-page.goto("https://www.instagram.com/")
-
-# =========================
-# SCRAPER
-# =========================
-
-def scrape_background(job):
-
-    username = job.username
-    log(f"Scraping: {username}")
-
-    try:
-
-        with sync_playwright() as p:
-
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage"
-                ]
-            )
-
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-                viewport={"width":1280,"height":800},
-                locale="en-US"
-            )
-
-            # add instagram session cookie
-            context.add_cookies([{
-                "name": "sessionid",
-                "value": IG_SESSIONID,
-                "domain": ".instagram.com",
-                "path": "/",
-                "httpOnly": True,
-                "secure": True,
-                "sameSite": "None"
-            }])
-
-            page = context.new_page()
-
-            url = f"https://www.instagram.com/{username}/"
-
-            delay = random.uniform(4,7)
-            print("Delay:", delay)
-            time.sleep(delay)
-
-            url = f"https://www.instagram.com/{username}/"
-            page.goto(url, wait_until="domcontentloaded")
-
-            time.sleep(5)
-
-            log(f"Current URL: {page.url}")
-
-            if "login" in page.url:
-                log("Instagram redirected to login")
-                return
-            if "suspended" in page.url:
-                log("instagram block the session")
-                return
-            
-            try:
-                page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
-            except:
-                print("Posts not visible yet, trying scroll...")
-
-            for _ in range(20):
-
-                if not job.running:
-                    break
-
-                links = page.evaluate("""
-                    Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
-                    .map(a => a.href)
-                """)
-
-                for link in links:
-                    link = link.split("?")[0]
-
-                    if link not in job.posts:
-                        job.posts.append(link)
-
-                print("Collected posts:", len(job.posts))
-
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(3)
-
-            browser.close()
-
-    except Exception as e:
-
-        log(f"Scraper error: {e}")
-# =========================
-# MEDIA FETCH
-# =========================
-def fetch_media(post_url):
-
-    try:
-
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
-
-        r = requests.get(post_url, headers=headers, timeout=15)
-
-        html = r.text
-
-        video = re.search(r'property="og:video" content="([^"]+)"', html)
-        image = re.search(r'property="og:image" content="([^"]+)"', html)
-
-        items = []
-
-        if video:
-            items.append(("video", video.group(1)))
-
-        if image:
-            items.append(("photo", image.group(1)))
-
-        return items
-
-    except Exception as e:
-
-        log(f"Media error: {e}")
+    if r.status_code != 200:
         return []
+
+    data = r.json()
+
+    posts = []
+
+    try:
+
+        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
+
+        for edge in edges:
+
+            node = edge["node"]
+
+            shortcode = node["shortcode"]
+
+            post_url = f"https://www.instagram.com/p/{shortcode}/"
+
+            posts.append(post_url)
+
+    except:
+        return []
+
+    return posts
+
+
+# =========================
+# GET MEDIA FROM POST
+# =========================
+
+def get_media(post_url):
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    r = requests.get(post_url, headers=headers)
+
+    html = r.text
+
+    video = re.search(r'property="og:video" content="([^"]+)"', html)
+    image = re.search(r'property="og:image" content="([^"]+)"', html)
+
+    media = []
+
+    if video:
+        media.append(("video", video.group(1)))
+
+    if image:
+        media.append(("photo", image.group(1)))
+
+    return media
+
+
 # =========================
 # START COMMAND
 # =========================
 
 @bot.message_handler(commands=["start"])
-def start(message):
+def start(m):
 
     bot.send_message(
-        message.chat.id,
+        m.chat.id,
         "Send Instagram username"
     )
+
 
 # =========================
 # USERNAME HANDLER
 # =========================
 
 @bot.message_handler(func=lambda m: True)
-def profile_handler(message):
+def handle_user(m):
 
-    username = message.text.strip()
+    username = m.text.strip().lower()
 
-    job = Job(username)
-    user_jobs[message.chat.id] = job
+    bot.send_message(m.chat.id, "Fetching posts...")
 
-    thread = threading.Thread(
-        target=scrape_background,
-        args=(job,)
-    )
-
-    thread.start()
-
-    markup = InlineKeyboardMarkup()
-
-    markup.add(
-        InlineKeyboardButton("Download 10 Posts", callback_data="next"),
-        InlineKeyboardButton("Cancel", callback_data="cancel")
-    )
-
-    bot.send_message(
-        message.chat.id,
-        "Scraping started.\nPress download to receive posts.",
-        reply_markup=markup
-    )
-
-# =========================
-# CANCEL
-# =========================
-
-@bot.callback_query_handler(func=lambda call: call.data == "cancel")
-def cancel(call):
-
-    job = user_jobs.get(call.message.chat.id)
-
-    if job:
-        job.running = False
-
-    bot.send_message(call.message.chat.id,"Scraping stopped.")
-
-# =========================
-# SEND POSTS
-# =========================
-@bot.callback_query_handler(func=lambda call: call.data == "next")
-def send_next(call):
-
-    job = user_jobs.get(call.message.chat.id)
-
-    if not job:
-        bot.send_message(call.message.chat.id, "No active job")
-        return
-
-    start = job.sent
-    end = start + 10
-    posts = job.posts[start:end]
+    posts = get_user_posts(username)
 
     if not posts:
-        bot.send_message(call.message.chat.id, "Still collecting posts...")
+        bot.send_message(m.chat.id, "No posts found or profile private")
         return
 
-    from io import BytesIO
-    from PIL import Image
+    for post in posts[:10]:
 
-    for post_url in posts:
-
-        medias = fetch_media(post_url)
+        medias = get_media(post)
 
         if not medias:
-            bot.send_message(call.message.chat.id, post_url)
+            bot.send_message(m.chat.id, post)
             continue
 
-        for media_type, media_url in medias:
-
-            log(f"Checking post: {post_url}")
-            log(f"Media type: {media_type}")
-            log(f"Media URL: {media_url}")
-
-            if not media_url:
-                bot.send_message(call.message.chat.id, post_url)
-                continue
-
-            media_url = media_url.replace("&amp;", "&")
-            media_url = media_url.replace(".heic", ".jpg")
-
-            log(f"Final media URL: {media_url}")
+        for media_type, url in medias:
 
             try:
 
-                page = browser.new_page()
-
-                response = page.goto(media_url, timeout=60000)
-
-                if not response:
-                    raise Exception("No response from CDN")
-
-                content = response.body()
-
-                file = BytesIO(content)
-
                 if media_type == "video":
 
-                    file.name = "video.mp4"
-                    bot.send_video(call.message.chat.id, file)
+                    bot.send_video(
+                        m.chat.id,
+                        url,
+                        caption="Downloaded via bot"
+                    )
 
-                elif media_type == "photo":
+                else:
 
-                    img = Image.open(file).convert("RGB")
+                    bot.send_photo(
+                        m.chat.id,
+                        url,
+                        caption="Downloaded via bot"
+                    )
 
-                    jpeg = BytesIO()
-                    img.save(jpeg, format="JPEG")
-                    jpeg.seek(0)
+                time.sleep(random.uniform(1,2))
 
-                    bot.send_photo(call.message.chat.id, jpeg)
+            except:
 
-                page.close()
+                bot.send_message(m.chat.id, post)
 
-            except Exception as e:
 
-                log(f"Telegram error: {e}")
-                bot.send_message(call.message.chat.id, post_url)
-
-            time.sleep(random.uniform(1.5, 3))
-
-    job.sent += len(posts)
-
-    markup = InlineKeyboardMarkup()
-    markup.add(
-        InlineKeyboardButton("Next 10", callback_data="next"),
-        InlineKeyboardButton("Cancel", callback_data="cancel")
-    )
-
-    bot.send_message(
-        call.message.chat.id,
-        f"Sent {job.sent} posts",
-        reply_markup=markup
-    )
 # =========================
 # RUN BOT
 # =========================
 
-print("Bot started")
+print("Bot running...")
 
 bot.infinity_polling()
