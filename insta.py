@@ -75,10 +75,10 @@ context.add_cookies([{
     "sameSite": "None"
 }])
 
-# Open page
+# Create page
 page = context.new_page()
 
-# Visit Instagram so session activates
+# Visit Instagram
 page.goto("https://www.instagram.com/")
 
 # open instagram first
