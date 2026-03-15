@@ -285,8 +285,14 @@ def scrape_background(job, context):
         # small delay for JS rendering
         time.sleep(random.uniform(3,6))
 
-        # trigger lazy loading
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        # scroll once to trigger posts loading
+        page.evaluate("""
+        window.scrollBy({
+            top: 800,
+            left: 0,
+            behavior: 'smooth'
+        });
+        """)
         time.sleep(random.uniform(4,6))
 
         for _ in range(20):
