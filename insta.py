@@ -74,12 +74,22 @@ context.add_cookies([{
     "secure": True,
     "sameSite": "None"
 }])
-
 # Create page
 page = context.new_page()
 
-# Activate session
-page.goto("https://www.instagram.com/")
+# Visit Instagram first
+page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+
+# Add session cookie AFTER visiting the site
+context.add_cookies([{
+    "name": "sessionid",
+    "value": IG_SESSIONID,
+    "domain": ".instagram.com",
+    "path": "/"
+}])
+
+# Reload so session activates
+page.reload()
 
 # =========================
 # SCRAPER
@@ -104,11 +114,14 @@ def scrape_background(job):
         time.sleep(5)
 
         log(f"Current URL: {page.url}")
+        if "challenge" in page.url:
+            log("Instagram triggered a security challenge. Session is blocked.")
+            page.close()
+            return
 
         if "login" in page.url:
             log("Instagram redirected to login")
             return
-
         page.wait_for_selector('a[href^="/p/"], a[href^="/reel/"]', timeout=30000)
 
         for _ in range(15):
@@ -190,7 +203,7 @@ def start(message):
 @bot.message_handler(func=lambda m: True)
 def profile_handler(message):
 
-    username = message.text.strip()
+    username = message.text.strip().lower()
 
     job = Job(username)
     user_jobs[message.chat.id] = job
