@@ -389,14 +389,7 @@ def playwright_worker():
         
 
         context.add_cookies([
-        {
-            "name": "sessionid",
-            "value": IG_SESSIONID,
-            "domain": ".instagram.com",
-            "path": "/",
-            "httpOnly": True,
-            "secure": True
-        },
+        
         {
             "name": "csrftoken",
             "value": "missing",
