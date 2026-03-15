@@ -21,7 +21,7 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 # INSTAGRAM SESSION
 # =========================
 
-IG_SESSIONID = "45575449095%3APTeNL8atjbF3Xs%3A9%3AAYhrp2AO-1Qn_PzdwHGe5QXpaBpzTh6oWBakuGsjlQ"
+IG_SESSIONID = "80454330558%3AgyVmoDRy4c8pBj%3A10%3AAYiQ7rgvA8jCZ_WEFR54X9TEPmj2mRs1s_cM8Mfghg"
 
 # =========================
 # JOB SYSTEM
@@ -52,9 +52,7 @@ print("Starting browser...")
 
 play = sync_playwright().start()
 
-# Launch persistent browser profile
-browser = play.chromium.launch_persistent_context(
-    user_data_dir="./ig_profile",
+browser = play.chromium.launch(
     headless=True,
     args=[
         "--disable-blink-features=AutomationControlled",
@@ -63,8 +61,26 @@ browser = play.chromium.launch_persistent_context(
     ]
 )
 
+context = browser.new_context()
+
+# inject instagram session cookie
+context.add_cookies([{
+    "name": "sessionid",
+    "value": IG_SESSIONID,
+    "domain": ".instagram.com",
+    "path": "/",
+    "httpOnly": True,
+    "secure": True,
+    "sameSite": "None"
+}])
+
+page = context.new_page()
+
+# visit instagram so cookie activates
+page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+
 # Open a page
-page = browser.new_page()
+page = context.new_page()
 
 # Visit Instagram so the saved session loads
 page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
