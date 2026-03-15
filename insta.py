@@ -49,8 +49,12 @@ def detect_instagram_state(page):
     log(f"Page title: {title}")
 
     # LOGIN WALL
-    if "accounts/login" in url or "Log in" in body:
+    if "accounts/login" in url:
         return "LOGIN_REQUIRED"
+
+    # CHECK IF POSTS EXIST
+    if page.query_selector("article") is None:
+        return "EMPTY_PAGE"
 
     # SESSION EXPIRED
     if "Please log in" in body:
