@@ -351,11 +351,19 @@ def scrape_background(job, context):
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         time.sleep(random.uniform(4,6))
 
+        previous_height = 0
+
         for _ in range(20):
 
             if not job.running:
                 break
+
+            # scroll first
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(random.uniform(4,6))
+
             log("Scanning page for posts...")
+
             links = page.evaluate("""
             Array.from(document.querySelectorAll('article a'))
             .map(a => "https://www.instagram.com" + a.getAttribute("href"))
@@ -374,7 +382,6 @@ def scrape_background(job, context):
                     job.post_set.add(link)
                     new_posts += 1
 
-                    # when first 10 posts collected show button
                     if len(job.posts) == 10:
 
                         markup = InlineKeyboardMarkup()
@@ -393,15 +400,14 @@ def scrape_background(job, context):
 
             log(f"Collected posts: {len(job.posts)} (+{new_posts})")
 
-            page.evaluate("""
-            window.scrollBy({
-                top: 1200,
-                left: 0,
-                behavior: 'smooth'
-            });
-            """)
+            # detect if page stopped loading new posts
+            current_height = page.evaluate("document.body.scrollHeight")
 
-            time.sleep(3)
+            if current_height == previous_height:
+                log("No more posts loading")
+                break
+
+            previous_height = current_height
 
     except Exception as e:
         log(f"Scraper error: {e}")
