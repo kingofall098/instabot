@@ -48,11 +48,7 @@ def get_user_posts(username):
     url = f"https://www.instagram.com/{username}/"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.instagram.com/",
-        "Cookie": f"sessionid={SESSIONID}"
+        "User-Agent": "Mozilla/5.0",
     }
 
     r = requests.get(url, headers=headers)
@@ -61,23 +57,42 @@ def get_user_posts(username):
 
     html = r.text
 
-    print("HTML length:", len(html))
+    # Extract user ID
+    match = re.search(r'"profilePage_(\d+)"', html)
 
-    # DEBUG
-    print("HTML preview:", html[:500])
+    if not match:
+        print("User ID not found")
+        return []
 
-    shortcodes = re.findall(r'"shortcode":"(.*?)"', html)
+    user_id = match.group(1)
 
-    print("Shortcodes found:", len(shortcodes))
+    print("User ID:", user_id)
+
+    # GraphQL query
+    graphql_url = "https://www.instagram.com/graphql/query/"
+
+    params = {
+        "query_hash": "58b6785bea111c67129decbe6a448951",
+        "variables": f'{{"id":"{user_id}","first":12}}'
+    }
+
+    r = requests.get(graphql_url, params=params, headers=headers)
+
+    print("GraphQL status:", r.status_code)
+
+    data = r.json()
 
     posts = []
 
-    for code in shortcodes:
+    edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
-        url = f"https://www.instagram.com/p/{code}/"
+    print("Edges found:", len(edges))
 
-        if url not in posts:
-            posts.append(url)
+    for edge in edges:
+
+        shortcode = edge["node"]["shortcode"]
+
+        posts.append(f"https://www.instagram.com/p/{shortcode}/")
 
     print("Collected posts:", len(posts))
 
