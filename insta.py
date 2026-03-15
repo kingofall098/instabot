@@ -168,7 +168,7 @@ def scrape_background(job, context):
         page.goto(url, wait_until="domcontentloaded")
 
         # wait for posts grid
-        page.wait_for_selector('a[href^="/p/"], a[href^="/reel/"]', timeout=15000)
+        page.wait_for_selector("article", timeout=20000)
 
         time.sleep(2)
 
@@ -186,11 +186,10 @@ def scrape_background(job, context):
         page.wait_for_load_state("networkidle")
 
         # small delay for JS rendering
-        time.sleep(3)
+        time.sleep(random.uniform(3,6))
 
         # trigger lazy loading
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(3)
         time.sleep(random.uniform(4,6))
 
         for _ in range(20):
@@ -199,18 +198,39 @@ def scrape_background(job, context):
                 break
             log("Scanning page for posts...")
             links = page.evaluate("""
-            Array.from(document.querySelectorAll('a[href^="/p/"], a[href^="/reel/"]'))
+            Array.from(document.querySelectorAll('article a'))
             .map(a => "https://www.instagram.com" + a.getAttribute("href"))
+            .filter(h => h.includes('/p/') || h.includes('/reel/'))
             """)
 
             new_posts = 0
 
             for link in links:
+
                 link = link.split("?")[0]
 
-                if link not in job.posts:
+                if link not in job.post_set:
+
                     job.posts.append(link)
+                    job.post_set.add(link)
                     new_posts += 1
+
+                    # when first 10 posts collected show button
+                    if len(job.posts) == 10:
+
+                        markup = InlineKeyboardMarkup()
+
+                        markup.add(
+                            InlineKeyboardButton("Download 10 Posts", callback_data="next"),
+                            InlineKeyboardButton("Cancel", callback_data="cancel")
+                        )
+
+                        bot.edit_message_text(
+                            "✅ 10 posts collected.\nPress download to receive media.",
+                            chat_id=job.chat_id,
+                            message_id=job.message_id,
+                            reply_markup=markup
+                        )
 
             log(f"Collected posts: {len(job.posts)} (+{new_posts})")
 
@@ -341,9 +361,12 @@ def playwright_worker():
 # =========================
 
 class Job:
-    def __init__(self, username):
+    def __init__(self, username, chat_id, message_id=None):
         self.username = username
+        self.chat_id = chat_id
+        self.message_id = message_id
         self.posts = []
+        self.post_set = set()
         self.sent = 0
         self.running = True
 
@@ -367,24 +390,15 @@ def profile_handler(message):
 
     username = message.text.strip().lower()
 
-    job = Job(username)
+    msg = bot.send_message(
+        message.chat.id,
+        "⏳ Collecting media from profile..."
+    )
+
+    job = Job(username, message.chat.id, msg.message_id)
     user_jobs[message.chat.id] = job
 
-    # start scraper in background
     job_queue.put(job)
-
-    markup = InlineKeyboardMarkup()
-
-    markup.add(
-        InlineKeyboardButton("Download 10 Posts", callback_data="next"),
-        InlineKeyboardButton("Cancel", callback_data="cancel")
-    )
-
-    bot.send_message(
-        message.chat.id,
-        "Scraping started.\nPress download to receive posts.",
-        reply_markup=markup
-    )
 
 # =========================
 # CANCEL
@@ -428,6 +442,7 @@ def send_next(call):
 
         log(f"Processing post URL: {post_url}")
         time.sleep(random.uniform(1,2))
+        time.sleep(random.uniform(2.5,4))
         post = get_post_from_url(post_url)
 
         if not post:
@@ -438,7 +453,7 @@ def send_next(call):
 
         for media_type, media_url in medias:
 
-            log(f"Checking post: {post}")
+            log(f"Checking post: {post.shortcode}")
             log(f"Media type: {media_type}")
             log(f"Media URL: {media_url}")
 
