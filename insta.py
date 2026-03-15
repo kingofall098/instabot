@@ -61,10 +61,10 @@ browser = play.chromium.launch(
     ]
 )
 
-# Create browser context
+# Create context
 context = browser.new_context()
 
-# Add Instagram session cookie
+# Add session cookie
 context.add_cookies([{
     "name": "sessionid",
     "value": IG_SESSIONID,
@@ -78,7 +78,7 @@ context.add_cookies([{
 # Create page
 page = context.new_page()
 
-# Visit Instagram
+# Activate session
 page.goto("https://www.instagram.com/")
 
 # open instagram first
