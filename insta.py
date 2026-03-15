@@ -123,12 +123,15 @@ def load_cookies(context):
             if len(parts) < 7:
                 continue
 
+            domain = parts[0].lstrip(".")   # <-- remove leading dot
+
             cookies.append({
-                "domain": parts[0],
+                "domain": domain,
                 "path": parts[2],
                 "name": parts[5],
                 "value": parts[6],
-                "secure": True
+                "secure": True,
+                "httpOnly": False
             })
 
     context.add_cookies(cookies)
@@ -249,7 +252,7 @@ def scrape_background(job, context):
         for attempt in range(3):
 
             try:
-                page.goto(url, wait_until="networkidle")
+                page.goto(url, wait_until="domcontentloaded")
                 page.wait_for_selector("header, main, article", timeout=20000)
                 break
 
@@ -429,6 +432,7 @@ def playwright_worker():
             viewport={"width": 1280, "height": 900}
         )
         load_cookies(context)
+        print(context.cookies())
 
     #     context.add_cookies([
     #     {
@@ -448,10 +452,12 @@ def playwright_worker():
     # ])
 
         page = context.new_page()
-        page.goto("https://www.instagram.com/")
+
+        page.goto("https://www.instagram.com/", wait_until="networkidle")
+
+        time.sleep(5)
 
         log("Instagram session activated")
-
         while True:
 
             try:
