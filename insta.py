@@ -49,12 +49,17 @@ def load_session_from_cookie():
 
     with open("cookies.txt", "r") as f:
         for line in f:
-            if "sessionid" in line:
 
-                parts = line.strip().split("\t")
+            if line.startswith("#"):
+                continue
+
+            parts = line.strip().split("\t")
+
+            if len(parts) >= 7 and parts[-2] == "sessionid":
+
                 session = parts[-1]
 
-                log(f"Loaded session: {session[:15]}...")
+                log(f"Loaded session: {session[:20]}...")
                 return session
 
     raise Exception("sessionid not found in cookies.txt")
@@ -90,10 +95,13 @@ context.add_cookies([{
     "sameSite": "None"
 }])
 
+# open page after cookie is set
 page = context.new_page()
 
-# visit instagram so cookie activates
-page.goto("https://www.instagram.com/")
+# visit instagram to activate session
+page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+
+log("Instagram session activated")
 
 # =========================
 # SCRAPER
@@ -165,7 +173,13 @@ def scrape_background(job):
 
             log(f"Collected posts: {len(job.posts)} (+{new_posts})")
 
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.evaluate("""
+            window.scrollBy({
+                top: 1200,
+                left: 0,
+                behavior: 'smooth'
+            });
+            """)
 
             time.sleep(3)
 
@@ -173,6 +187,12 @@ def scrape_background(job):
 
     except Exception as e:
         log(f"Scraper error: {e}")
+
+    finally:
+        try:
+            page.close()
+        except:
+            pass
 # =========================
 # MEDIA FETCH
 # =========================
