@@ -118,10 +118,9 @@ def load_cookies(context):
 
             if len(parts) < 7:
                 continue
-
-            domain = parts[0]  
+  
             cookies.append({
-                "domain": domain,
+                "domain": parts[0],
                 "path": parts[2],
                 "name": parts[5],
                 "value": parts[6],
