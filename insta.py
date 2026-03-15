@@ -100,8 +100,9 @@ def scrape_background(job):
             page.close()
             return
 
-        if "login" in page.url:
-            log("Instagram redirected to login")
+        if "accounts/login" in page.url:
+            log("Session expired. Instagram requires login.")
+            page.close()
             return
         # wait until page loads
         page.wait_for_load_state("networkidle")
