@@ -20,7 +20,7 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 # INSTAGRAM SESSION
 # =========================
 
-IG_SESSIONID = "80454330558%3AtpURNMPKDVS2DH%3A16%3AAYjBDatw2qKZntVyio7s28j5Y7f0JchpOveCkxtx4w"
+IG_SESSIONID = "45575449095%3APTeNL8atjbF3Xs%3A9%3AAYhrp2AO-1Qn_PzdwHGe5QXpaBpzTh6oWBakuGsjlQ"
 
 # =========================
 # JOB SYSTEM
