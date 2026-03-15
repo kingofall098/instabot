@@ -105,10 +105,7 @@ page = context.new_page()
 page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
 
 log("Instagram session activated")
-threading.Thread(
-    target=playwright_worker,
-    daemon=True
-).start()
+
 # =========================
 # SCRAPER
 # =========================
@@ -274,6 +271,8 @@ def profile_handler(message):
     # start scraper in background
     job_queue.put(job)
 
+    time.sleep(1)
+
     markup = InlineKeyboardMarkup()
 
     markup.add(
@@ -406,7 +405,14 @@ def send_next(call):
 # =========================
 # RUN BOT
 # =========================
-
 print("Bot started")
+
+# start playwright worker
+threading.Thread(
+    target=playwright_worker,
+    daemon=True
+).start()
+
+bot.infinity_polling()
 
 bot.infinity_polling()
