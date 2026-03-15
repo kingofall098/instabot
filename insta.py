@@ -95,7 +95,7 @@ def detect_instagram_state(page):
         return "PROFILE_NOT_FOUND"
 
     # EMPTY PAGE / SELECTOR MISSING
-    if page.query_selector("article") is None and "instagram" in title.lower():
+    if page.query_selector("article a") is None:
         return "EMPTY_PAGE"
 
     return "OK"
@@ -119,8 +119,7 @@ def load_cookies(context):
             if len(parts) < 7:
                 continue
 
-            domain = parts[0].lstrip(".")   # <-- remove leading dot
-
+            domain = parts[0]  
             cookies.append({
                 "domain": domain,
                 "path": parts[2],
@@ -395,7 +394,8 @@ def scrape_background(job, context):
                         )
 
             log(f"Collected posts: {len(job.posts)} (+{new_posts})")
-
+            previous_height = 0
+            no_change_count = 0
             # detect if page stopped loading new posts
             current_height = page.evaluate("document.body.scrollHeight")
 
@@ -439,6 +439,9 @@ def playwright_worker():
             viewport={"width": 1280, "height": 900}
         )
         load_cookies(context)
+
+        page = context.new_page()
+
         page.goto("https://www.instagram.com/accounts/edit/")
         print("Current URL:", page.url)
         print(context.cookies())
