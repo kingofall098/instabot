@@ -203,6 +203,9 @@ def scrape_background(job, context):
 
         
         #open profile
+        page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+        time.sleep(3)
+
         page.goto(url, wait_until="domcontentloaded")
 
         time.sleep(3)
@@ -378,18 +381,26 @@ def playwright_worker():
         )
 
         context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
             viewport={"width": 1280, "height": 900}
         )
 
-        context.add_cookies([{
+        context.add_cookies([
+        {
             "name": "sessionid",
             "value": IG_SESSIONID,
             "domain": ".instagram.com",
             "path": "/",
             "httpOnly": True,
-            "secure": True,
-            "sameSite": "None"
-        }])
+            "secure": True
+        },
+        {
+            "name": "csrftoken",
+            "value": "missing",
+            "domain": ".instagram.com",
+            "path": "/"
+        }
+    ])
 
         page = context.new_page()
         page.goto("https://www.instagram.com/")
