@@ -16,16 +16,16 @@ import instaloader
 # BOT TOKEN
 # =========================
 
-TOKEN = "8665521420:AAHi0hfMNn3odVDCd9ajMCW_8FwrSz2OQLQ"
+TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN, threaded=True)
 from queue import Queue
-
+user_jobs ={}
 job_queue = Queue()
 # =========================
 # INSTAGRAM SESSION
 # =========================
 
-# IG_SESSIONID = "45575449095%3APTeNL8atjbF3Xs%3A9%3AAYhrp2AO-1Qn_PzdwHGe5QXpaBpzTh6oWBakuGsjlQ"
+# IG_SESSIONID = "80454330558%3AgyVmoDRy4c8pBj%3A10%3AAYiQ7rgvA8jCZ_WEFR54X9TEPmj2mRs1s_cM8Mfghg"
 
 # =========================
 # JOB SYSTEM
@@ -35,7 +35,44 @@ job_queue = Queue()
 # =========================
 
 
+def detect_instagram_state(page):
 
+    url = page.url
+    title = page.title()
+
+    try:
+        body = page.inner_text("body")
+    except:
+        body = ""
+
+    log(f"Page URL: {url}")
+    log(f"Page title: {title}")
+
+    # LOGIN WALL
+    if "accounts/login" in url or "Log in" in body:
+        return "LOGIN_REQUIRED"
+
+    # SESSION EXPIRED
+    if "Please log in" in body:
+        return "SESSION_EXPIRED"
+
+    # CHALLENGE / CHECKPOINT
+    if "challenge" in url or "checkpoint" in url:
+        return "CHALLENGE"
+
+    # RATE LIMIT
+    if "Try again later" in body or "Please wait a few minutes" in body:
+        return "RATE_LIMIT"
+
+    # PROFILE NOT FOUND
+    if "Sorry, this page isn't available" in body:
+        return "PROFILE_NOT_FOUND"
+
+    # EMPTY PAGE / SELECTOR MISSING
+    if page.query_selector("article") is None and "instagram" in title.lower():
+        return "EMPTY_PAGE"
+
+    return "OK"
 def log(msg):
     t = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{t}] {msg}")
@@ -86,25 +123,25 @@ print("Instaloader session active")
 
 print("Starting browser...")
 
-def get_profile_posts(username, limit=100):
+# def get_profile_posts(username, limit=100):
 
-    posts = []
+#     posts = []
 
-    profile = instaloader.Profile.from_username(
-        L.context,
-        username
-    )
+#     profile = instaloader.Profile.from_username(
+#         L.context,
+#         username
+#     )
 
-    for post in profile.get_posts():
+#     for post in profile.get_posts():
 
-        posts.append(post)
+#         posts.append(post)
 
-        if len(posts) >= limit:
-            break
+#         if len(posts) >= limit:
+#             break
 
-    log(f"Collected {len(posts)} posts using Instaloader")
+#     log(f"Collected {len(posts)} posts using Instaloader")
 
-    return posts
+#     return posts
 def extract_media(post):
 
     items = []
@@ -135,7 +172,7 @@ def get_post_from_url(post_url):
 
     try:
 
-        shortcode = post_url.split("/p/")[1].split("/")[0]
+        shortcode = post_url.split("/")[4]
 
         post = instaloader.Post.from_shortcode(
             L.context,
@@ -156,18 +193,96 @@ def scrape_background(job, context):
     username = job.username
     log(f"Scraping started for {username}")
 
+    
     try:
+        #create new page
+        page = context.new_page() 
 
-        page = context.new_page()
-
+        #build profile url
         url = f"https://www.instagram.com/{username}/"
 
-        delay = random.uniform(4,7)
-        time.sleep(delay)
+        
+        #open profile
+        page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+        time.sleep(3)
 
         page.goto(url, wait_until="domcontentloaded")
 
-        time.sleep(5)
+        time.sleep(3)
+
+        # wait for instagram app container
+        page.wait_for_selector("main", timeout=30000)
+
+        log("Main container loaded")
+
+        # small scroll to trigger grid loading
+        page.evaluate("window.scrollTo(0, 300)")
+        time.sleep(2)
+
+        # scroll again
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        state = detect_instagram_state(page)
+        time.sleep(4)
+
+        state = detect_instagram_state(page)
+        if state == "EMPTY_PAGE":
+
+            log("Page appears empty, performing progressive scroll")
+
+            for i in range(3):
+
+                page.evaluate("window.scrollBy(0, 600)")
+                time.sleep(3)
+
+                if page.query_selector("article") is not None:
+                    log("Post grid detected after scroll")
+                    break
+
+            if page.query_selector("article") is None:
+                log("Still empty after multiple scroll attempts")
+                return
+
+        if state != "OK":
+
+            log(f"Instagram state detected: {state}")
+
+            if state == "LOGIN_REQUIRED":
+                log("Instagram forced login wall")
+
+            elif state == "CHALLENGE":
+                log("Instagram checkpoint challenge triggered")
+
+            elif state == "RATE_LIMIT":
+                log("Instagram soft block detected")
+
+            elif state == "PROFILE_NOT_FOUND":
+                log("Profile does not exist")
+
+            page.close()
+            return
+
+        # wait for posts grid
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(3)
+
+            page.wait_for_selector("article", timeout=20000)
+
+        except Exception as e:
+
+            log("Post grid not detected")
+
+            html_preview = page.content()[:1000]
+            log("HTML preview:")
+            log(html_preview)
+
+            state = detect_instagram_state(page)
+            log(f"Page diagnostic result: {state}")
+
+            page.close()
+            return
+
+        time.sleep(2)
 
         log(f"Current URL: {page.url}")
         if "challenge" in page.url:
@@ -183,16 +298,10 @@ def scrape_background(job, context):
         page.wait_for_load_state("networkidle")
 
         # small delay for JS rendering
-        time.sleep(3)
+        time.sleep(random.uniform(3,6))
 
-        # scroll once to trigger posts loading
-        page.evaluate("""
-        window.scrollBy({
-            top: 800,
-            left: 0,
-            behavior: 'smooth'
-        });
-        """)
+        # trigger lazy loading
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         time.sleep(random.uniform(4,6))
 
         for _ in range(20):
@@ -201,19 +310,39 @@ def scrape_background(job, context):
                 break
             log("Scanning page for posts...")
             links = page.evaluate("""
-                Array.from(document.querySelectorAll('a'))
-                    .map(a => a.href)
-                    .filter(h => h.includes('/p/') || h.includes('/reel/'))
+            Array.from(document.querySelectorAll('article a'))
+            .map(a => "https://www.instagram.com" + a.getAttribute("href"))
+            .filter(h => h.includes('/p/') || h.includes('/reel/'))
             """)
 
             new_posts = 0
 
             for link in links:
+
                 link = link.split("?")[0]
 
-                if link not in job.posts:
+                if link not in job.post_set:
+
                     job.posts.append(link)
+                    job.post_set.add(link)
                     new_posts += 1
+
+                    # when first 10 posts collected show button
+                    if len(job.posts) == 10:
+
+                        markup = InlineKeyboardMarkup()
+
+                        markup.add(
+                            InlineKeyboardButton("Download 10 Posts", callback_data="next"),
+                            InlineKeyboardButton("Cancel", callback_data="cancel")
+                        )
+
+                        bot.edit_message_text(
+                            "✅ 10 posts collected.\nPress download to receive media.",
+                            chat_id=job.chat_id,
+                            message_id=job.message_id,
+                            reply_markup=markup
+                        )
 
             log(f"Collected posts: {len(job.posts)} (+{new_posts})")
 
@@ -226,8 +355,6 @@ def scrape_background(job, context):
             """)
 
             time.sleep(3)
-
-        page.close()
 
     except Exception as e:
         log(f"Scraper error: {e}")
@@ -253,17 +380,27 @@ def playwright_worker():
             ]
         )
 
-        context = browser.new_context()
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+            viewport={"width": 1280, "height": 900}
+        )
 
-        context.add_cookies([{
+        context.add_cookies([
+        {
             "name": "sessionid",
             "value": IG_SESSIONID,
             "domain": ".instagram.com",
             "path": "/",
             "httpOnly": True,
-            "secure": True,
-            "sameSite": "None"
-        }])
+            "secure": True
+        },
+        {
+            "name": "csrftoken",
+            "value": "missing",
+            "domain": ".instagram.com",
+            "path": "/"
+        }
+    ])
 
         page = context.new_page()
         page.goto("https://www.instagram.com/")
@@ -272,7 +409,11 @@ def playwright_worker():
 
         while True:
 
-            job = job_queue.get()
+            try:
+                job = job_queue.get()
+            except Exception as e:
+                log(f"Queue error: {e}")
+                continue
 
             if job is None:
                 break
@@ -338,6 +479,21 @@ def playwright_worker():
 
 #         log(f"Media error: {e}")
 #         return []
+
+# =========================
+# JOB SYSTEM
+# =========================
+
+class Job:
+    def __init__(self, username, chat_id, message_id=None):
+        self.username = username
+        self.chat_id = chat_id
+        self.message_id = message_id
+        self.posts = []
+        self.post_set = set()
+        self.sent = 0
+        self.running = True
+
 # =========================
 # START COMMAND
 # =========================
@@ -349,14 +505,6 @@ def start(message):
         message.chat.id,
         "Send Instagram username"
     )
-class Job:
-    def __init__(self, username):
-        self.username = username
-        self.posts = []
-        self.sent = 0
-        self.running = True
-user_jobs ={}
-job_queue = Queue()
 # =========================
 # USERNAME HANDLER
 # =========================
@@ -366,24 +514,15 @@ def profile_handler(message):
 
     username = message.text.strip().lower()
 
-    job = Job(username)
+    msg = bot.send_message(
+        message.chat.id,
+        "⏳ Collecting media from profile..."
+    )
+
+    job = Job(username, message.chat.id, msg.message_id)
     user_jobs[message.chat.id] = job
 
-    # start scraper in background
     job_queue.put(job)
-
-    markup = InlineKeyboardMarkup()
-
-    markup.add(
-        InlineKeyboardButton("Download 10 Posts", callback_data="next"),
-        InlineKeyboardButton("Cancel", callback_data="cancel")
-    )
-
-    bot.send_message(
-        message.chat.id,
-        "Scraping started.\nPress download to receive posts.",
-        reply_markup=markup
-    )
 
 # =========================
 # CANCEL
@@ -425,8 +564,8 @@ def send_next(call):
 
     for post_url in posts:
 
-        log(f"Processing: {post_url}")
-
+        log(f"Processing post URL: {post_url}")
+        time.sleep(random.uniform(2.5,4))
         post = get_post_from_url(post_url)
 
         if not post:
@@ -437,7 +576,7 @@ def send_next(call):
 
         for media_type, media_url in medias:
 
-            log(f"Checking post: {post}")
+            log(f"Checking post: {post.shortcode}")
             log(f"Media type: {media_type}")
             log(f"Media URL: {media_url}")
 
@@ -492,6 +631,11 @@ def send_next(call):
             time.sleep(random.uniform(1.5, 3))
 
     job.sent += len(posts)
+
+    # cooldown every 10 posts to avoid Instagram rate limits
+    if job.sent % 10 == 0:
+        log("Cooldown triggered to avoid rate limit")
+        time.sleep(random.uniform(6,10))
 
     markup = InlineKeyboardMarkup()
     markup.add(
