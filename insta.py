@@ -37,7 +37,6 @@ user_jobs = {}
 # =========================
 # GET POSTS
 # =========================
-
 import requests
 import re
 import json
@@ -47,11 +46,11 @@ def get_user_posts(username):
     print("\n=== FETCHING PROFILE ===")
     print("Username:", username)
 
-    url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+    url = f"https://www.instagram.com/{username}/"
 
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Accept": "*/*"
+        "Accept-Language": "en-US,en;q=0.9"
     }
 
     r = requests.get(url, headers=headers)
@@ -62,32 +61,41 @@ def get_user_posts(username):
         print("Profile request failed")
         return []
 
-    data = r.json()
-
-    posts = []
+    html = r.text
 
     try:
+        # Instagram embeds profile JSON in this script block
+        match = re.search(r'window\._sharedData = (.*?);</script>', html)
 
-        edges = data["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
+        if not match:
+            print("Could not find sharedData")
+            return []
+
+        data = json.loads(match.group(1))
+
+        edges = data["entry_data"]["ProfilePage"][0]["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
         print("Edges found:", len(edges))
+
+        posts = []
 
         for edge in edges:
 
             shortcode = edge["node"]["shortcode"]
 
-            post_url = f"https://www.instagram.com/p/{shortcode}/"
+            posts.append(
+                f"https://www.instagram.com/p/{shortcode}/"
+            )
 
-            posts.append(post_url)
+        print("Collected posts:", len(posts))
+
+        return posts
 
     except Exception as e:
 
         print("Parsing error:", e)
 
-    print("Collected posts:", len(posts))
-
-    return posts
-
+        return []
 
 # =========================
 # GET MEDIA
