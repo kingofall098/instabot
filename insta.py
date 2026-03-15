@@ -69,7 +69,7 @@ def detect_instagram_state(page):
         return "PROFILE_NOT_FOUND"
 
     # EMPTY PAGE / SELECTOR MISSING
-    if page.query_selector("article") is None:
+    if page.query_selector("article") is None and "instagram" in title.lower():
         return "EMPTY_PAGE"
 
     return "OK"
@@ -172,7 +172,7 @@ def get_post_from_url(post_url):
 
     try:
 
-        shortcode = post_url.split("/p/")[1].split("/")[0]
+        shortcode = post_url.split("/")[4]
 
         post = instaloader.Post.from_shortcode(
             L.context,
@@ -248,6 +248,9 @@ def scrape_background(job, context):
 
         # wait for posts grid
         try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(3)
+
             page.wait_for_selector("article", timeout=20000)
 
         except Exception as e:
@@ -338,8 +341,6 @@ def scrape_background(job, context):
 
             time.sleep(3)
 
-        page.close()
-
     except Exception as e:
         log(f"Scraper error: {e}")
 
@@ -383,7 +384,11 @@ def playwright_worker():
 
         while True:
 
-            job = job_queue.get()
+            try:
+                job = job_queue.get()
+            except Exception as e:
+                log(f"Queue error: {e}")
+                continue
 
             if job is None:
                 break
@@ -535,7 +540,6 @@ def send_next(call):
     for post_url in posts:
 
         log(f"Processing post URL: {post_url}")
-        time.sleep(random.uniform(1,2))
         time.sleep(random.uniform(2.5,4))
         post = get_post_from_url(post_url)
 
@@ -602,6 +606,11 @@ def send_next(call):
             time.sleep(random.uniform(1.5, 3))
 
     job.sent += len(posts)
+
+    # cooldown every 10 posts to avoid Instagram rate limits
+    if job.sent % 10 == 0:
+        log("Cooldown triggered to avoid rate limit")
+        time.sleep(random.uniform(6,10))
 
     markup = InlineKeyboardMarkup()
     markup.add(
