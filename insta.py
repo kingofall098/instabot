@@ -193,38 +193,50 @@ def scrape_background(job, context):
     username = job.username
     log(f"Scraping started for {username}")
 
+    
     try:
+        #create new page
+        page = context.new_page() 
 
-        page = context.new_page()
-
+        #build profile url
         url = f"https://www.instagram.com/{username}/"
 
-        delay = random.uniform(4,7)
-        time.sleep(delay)
-
+        
+        #open profile
         page.goto(url, wait_until="domcontentloaded")
 
+        time.sleep(3)
+
         # wait for instagram app container
-        page.wait_for_selector("main", timeout=20000)
+        page.wait_for_selector("main", timeout=30000)
 
-        time.sleep(3)
+        log("Main container loaded")
 
-        # trigger lazy loading
+        # small scroll to trigger grid loading
+        page.evaluate("window.scrollTo(0, 300)")
+        time.sleep(2)
+
+        # scroll again
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(3)
+        state = detect_instagram_state(page)
+        time.sleep(4)
 
         state = detect_instagram_state(page)
         if state == "EMPTY_PAGE":
 
-            log("Page appears empty, retrying after scroll")
+            log("Page appears empty, performing progressive scroll")
 
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(5)
+            for i in range(3):
 
-            state = detect_instagram_state(page)
+                page.evaluate("window.scrollBy(0, 600)")
+                time.sleep(3)
 
-            if state != "OK":
-                log("Still empty after retry")
+                if page.query_selector("article") is not None:
+                    log("Post grid detected after scroll")
+                    break
+
+            if page.query_selector("article") is None:
+                log("Still empty after multiple scroll attempts")
                 return
 
         if state != "OK":
@@ -285,14 +297,8 @@ def scrape_background(job, context):
         # small delay for JS rendering
         time.sleep(random.uniform(3,6))
 
-        # scroll once to trigger posts loading
-        page.evaluate("""
-        window.scrollBy({
-            top: 800,
-            left: 0,
-            behavior: 'smooth'
-        });
-        """)
+        # trigger lazy loading
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         time.sleep(random.uniform(4,6))
 
         for _ in range(20):
@@ -371,7 +377,9 @@ def playwright_worker():
             ]
         )
 
-        context = browser.new_context()
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 900}
+        )
 
         context.add_cookies([{
             "name": "sessionid",
