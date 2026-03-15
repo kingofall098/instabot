@@ -10,6 +10,7 @@ import random
 import re
 import json
 from io import BytesIO
+from queue import Queue
 # =========================
 # BOT TOKEN
 # =========================
@@ -35,7 +36,7 @@ class Job:
         self.running = True
 
 user_jobs = {}
-
+job_queue = Queue()
 # =========================
 # LOG FUNCTION
 # =========================
@@ -104,7 +105,10 @@ page = context.new_page()
 page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
 
 log("Instagram session activated")
-
+threading.Thread(
+    target=playwright_worker,
+    daemon=True
+).start()
 # =========================
 # SCRAPER
 # =========================
@@ -194,6 +198,22 @@ def scrape_background(job):
             page.close()
         except:
             pass
+
+def playwright_worker():
+
+    while True:
+
+        job = job_queue.get()
+
+        if job is None:
+            break
+
+        try:
+            scrape_background(job)
+        except Exception as e:
+            log(f"Worker error: {e}")
+
+        job_queue.task_done()
 # =========================
 # MEDIA FETCH
 # =========================
@@ -252,7 +272,7 @@ def profile_handler(message):
     user_jobs[message.chat.id] = job
 
     # start scraper in background
-    scrape_background(job)
+    job_queue.put(job)
 
     markup = InlineKeyboardMarkup()
 
