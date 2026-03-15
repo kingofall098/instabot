@@ -69,7 +69,7 @@ def detect_instagram_state(page):
         return "PROFILE_NOT_FOUND"
 
     # EMPTY PAGE / SELECTOR MISSING
-    if "<article" not in page.content():
+    if page.query_selector("article") is None:
         return "EMPTY_PAGE"
 
     return "OK"
@@ -203,15 +203,29 @@ def scrape_background(job, context):
         time.sleep(delay)
 
         page.goto(url, wait_until="domcontentloaded")
+
+        # wait for instagram app container
+        page.wait_for_selector("main", timeout=20000)
+
         time.sleep(3)
 
-        log("Page title: " + page.title())
-
-        html_preview = page.content()[:1000]
-        log("HTML preview:")
-        log(html_preview)
+        # trigger lazy loading
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(3)
 
         state = detect_instagram_state(page)
+        if state == "EMPTY_PAGE":
+
+            log("Page appears empty, retrying after scroll")
+
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(5)
+
+            state = detect_instagram_state(page)
+
+            if state != "OK":
+                log("Still empty after retry")
+                return
 
         if state != "OK":
 
