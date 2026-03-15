@@ -1,4 +1,4 @@
-#2FORWARD INSTA POST LINKS 
+#3FORWARD INSTA POST LINKS 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from playwright.sync_api import sync_playwright
@@ -11,6 +11,7 @@ import re
 import json
 from io import BytesIO
 from queue import Queue
+import instaloader
 # =========================
 # BOT TOKEN
 # =========================
@@ -26,17 +27,7 @@ bot = telebot.TeleBot(TOKEN, threaded=True)
 
 # =========================
 # JOB SYSTEM
-# =========================
 
-class Job:
-    def __init__(self, username):
-        self.username = username
-        self.posts = []
-        self.sent = 0
-        self.running = True
-
-user_jobs = {}
-job_queue = Queue()
 # =========================
 # LOG FUNCTION
 # =========================
@@ -69,12 +60,90 @@ import os
 print("Files in project:", os.listdir())
 IG_SESSIONID = load_session_from_cookie()
 # =========================
+# INSTALOADER
+# =========================
+
+L = instaloader.Instaloader(
+    download_pictures=False,
+    download_videos=False,
+    download_video_thumbnails=False,
+    save_metadata=False
+)
+
+L.context._session.cookies.set(
+    "sessionid",
+    IG_SESSIONID,
+    domain=".instagram.com"
+)
+print("Instaloader session active")
+# =========================
 # START PLAYWRIGHT
 # =========================
 
 print("Starting browser...")
 
+def get_profile_posts(username, limit=100):
 
+    posts = []
+
+    profile = instaloader.Profile.from_username(
+        L.context,
+        username
+    )
+
+    for post in profile.get_posts():
+
+        posts.append(post)
+
+        if len(posts) >= limit:
+            break
+
+    log(f"Collected {len(posts)} posts using Instaloader")
+
+    return posts
+def extract_media(post):
+
+    items = []
+
+    # carousel
+    if post.typename == "GraphSidecar":
+
+        for node in post.get_sidecar_nodes():
+
+            if node.is_video:
+                items.append(("video", node.video_url))
+            else:
+                items.append(("photo", node.display_url))
+
+    # single video
+    elif post.is_video:
+
+        items.append(("video", post.video_url))
+
+    # single image
+    else:
+
+        items.append(("photo", post.url))
+
+    return items
+
+def get_post_from_url(post_url):
+
+    try:
+
+        shortcode = post_url.split("/p/")[1].split("/")[0]
+
+        post = instaloader.Post.from_shortcode(
+            L.context,
+            shortcode
+        )
+
+        return post
+
+    except Exception as e:
+
+        log(f"Instaloader error: {e}")
+        return None
 # =========================
 # SCRAPER
 # =========================
@@ -213,58 +282,58 @@ def playwright_worker():
 # =========================
 # MEDIA FETCH
 # =========================
-def fetch_media(post_url):
+# def fetch_media(post_url):
 
-    try:
+#     try:
 
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
+#         headers = {
+#             "User-Agent": "Mozilla/5.0",
+#             "Accept-Language": "en-US,en;q=0.9"
+#         }
 
-        r = requests.get(post_url, headers=headers, timeout=15)
-        html = r.text
+#         r = requests.get(post_url, headers=headers, timeout=15)
+#         html = r.text
 
-        items = []
+#         items = []
 
-        # Extract JSON block
-        data_match = re.search(r'window\._sharedData = (.*?);</script>', html)
+#         # Extract JSON block
+#         data_match = re.search(r'window\._sharedData = (.*?);</script>', html)
 
-        if not data_match:
-            return items
+#         if not data_match:
+#             return items
 
-        data = json.loads(data_match.group(1))
+#         data = json.loads(data_match.group(1))
 
-        media = data["entry_data"]["PostPage"][0]["graphql"]["shortcode_media"]
+#         media = data["entry_data"]["PostPage"][0]["graphql"]["shortcode_media"]
 
-        # VIDEO
-        if media["is_video"]:
-            items.append(("video", media["video_url"]))
+#         # VIDEO
+#         if media["is_video"]:
+#             items.append(("video", media["video_url"]))
 
-        # SINGLE IMAGE
-        elif "display_url" in media:
-            items.append(("photo", media["display_url"]))
+#         # SINGLE IMAGE
+#         elif "display_url" in media:
+#             items.append(("photo", media["display_url"]))
 
-        # CAROUSEL
-        if "edge_sidecar_to_children" in media:
+#         # CAROUSEL
+#         if "edge_sidecar_to_children" in media:
 
-            edges = media["edge_sidecar_to_children"]["edges"]
+#             edges = media["edge_sidecar_to_children"]["edges"]
 
-            for edge in edges:
+#             for edge in edges:
 
-                node = edge["node"]
+#                 node = edge["node"]
 
-                if node["is_video"]:
-                    items.append(("video", node["video_url"]))
-                else:
-                    items.append(("photo", node["display_url"]))
+#                 if node["is_video"]:
+#                     items.append(("video", node["video_url"]))
+#                 else:
+#                     items.append(("photo", node["display_url"]))
 
-        return items
+#         return items
 
-    except Exception as e:
+#     except Exception as e:
 
-        log(f"Media error: {e}")
-        return []
+#         log(f"Media error: {e}")
+#         return []
 # =========================
 # START COMMAND
 # =========================
@@ -345,20 +414,24 @@ def send_next(call):
 
     for post_url in posts:
 
-        medias = fetch_media(post_url)
+        log(f"Processing: {post_url}")
 
-        if not medias:
+        post = get_post_from_url(post_url)
+
+        if not post:
             bot.send_message(call.message.chat.id, post_url)
             continue
 
+        medias = extract_media(post)
+
         for media_type, media_url in medias:
 
-            log(f"Checking post: {post_url}")
+            log(f"Checking post: {post}")
             log(f"Media type: {media_type}")
             log(f"Media URL: {media_url}")
 
             if not media_url:
-                bot.send_message(call.message.chat.id, post_url)
+                bot.send_message(call.message.chat.id, post)
                 continue
 
             media_url = media_url.replace("&amp;", "&")
@@ -403,7 +476,7 @@ def send_next(call):
             except Exception as e:
 
                 log(f"Telegram error: {e}")
-                bot.send_message(call.message.chat.id, post_url)
+                bot.send_message(call.message.chat.id, post)
 
             time.sleep(random.uniform(1.5, 3))
 
@@ -432,3 +505,4 @@ threading.Thread(
 ).start()
 
 bot.infinity_polling()
+
