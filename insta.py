@@ -1,360 +1,364 @@
-import os
-import re
-import json
-import uuid
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from playwright.sync_api import sync_playwright
+import threading
+import requests
+import datetime
 import time
 import random
-import logging
-import requests
-from datetime import datetime
-import pytz
-from http.cookiejar import MozillaCookieJar
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters,
-)
-from telegram.constants import ChatAction
-
-from instaloader import Instaloader, Post
-
-
-# ===============================
-# CONFIG
-# ===============================
+import re
+import json
+from io import BytesIO
+# =========================
+# BOT TOKEN
+# =========================
 
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
-COOKIE_FILE = "cookies.txt"
-
-DOWNLOAD_DIR = "downloads"
-USERS_FILE = "users.json"
-ADMIN_FILE = "admin.json"
-
-TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
-
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-# ===============================
-# LOGGER
-# ===============================
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ===============================
+# =========================
 # INSTAGRAM SESSION
-# ===============================
+# =========================
 
-loader = Instaloader()
+IG_SESSIONID = "80454330558%3AtpURNMPKDVS2DH%3A16%3AAYjBDatw2qKZntVyio7s28j5Y7f0JchpOveCkxtx4w"
 
-def load_cookie_session():
+# =========================
+# JOB SYSTEM
+# =========================
 
-    jar = MozillaCookieJar(COOKIE_FILE)
+class Job:
+    def __init__(self, username):
+        self.username = username
+        self.posts = []
+        self.sent = 0
+        self.running = True
 
-    jar.load(ignore_discard=True, ignore_expires=True)
+user_jobs = {}
 
-    for cookie in jar:
-        loader.context._session.cookies.set_cookie(cookie)
+# =========================
+# LOG FUNCTION
+# =========================
 
-    print("Instagram cookies loaded")
+def log(msg):
+    t = datetime.datetime.now().strftime("%H:%M:%S")
+    print(f"[{t}] {msg}")
 
-load_cookie_session()
+# =========================
+# START PLAYWRIGHT
+# =========================
 
-# ===============================
-# MEMORY STATE
-# ===============================
+print("Starting browser...")
 
-profile_state = {}  # pagination memory
+play = sync_playwright().start()
 
-# ===============================
-# ADMIN SYSTEM
-# ===============================
+browser = play.chromium.launch_persistent_context(
+    user_data_dir="./ig_profile",
+    headless=True,
+    args=["--disable-blink-features=AutomationControlled"]
+)
 
-def get_admin():
+page = browser.new_page()
 
-    if os.path.exists(ADMIN_FILE):
-        with open(ADMIN_FILE) as f:
-            return json.load(f)["admin_id"]
+# open instagram first
+page.goto("https://www.instagram.com")
 
-    return None
+# add session cookie
+browser.add_cookies([{
+    "name": "sessionid",
+    "value": IG_SESSIONID,
+    "domain": ".instagram.com",
+    "path": "/",
+    "httpOnly": True,
+    "secure": True,
+    "sameSite": "None"
+}])
 
+# reload so session activates
+page.goto("https://www.instagram.com/")
 
-def set_admin(user_id):
+# =========================
+# SCRAPER
+# =========================
 
-    if not os.path.exists(ADMIN_FILE):
-        with open(ADMIN_FILE, "w") as f:
-            json.dump({"admin_id": user_id}, f)
+def scrape_background(job):
 
-# ===============================
-# USER LOGGING
-# ===============================
-
-def log_user(user):
-
-    time_now = datetime.now(TASHKENT_TZ).strftime("%Y-%m-%d %H:%M:%S")
-
-    data = {
-        "id": user.id,
-        "username": user.username,
-        "name": user.first_name,
-        "time": time_now
-    }
-
-    users = []
-
-    if os.path.exists(USERS_FILE):
-
-        with open(USERS_FILE) as f:
-            users = json.load(f)
-
-    if not any(u["id"] == user.id for u in users):
-        users.append(data)
-
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2)
-
-# ===============================
-# URL HELPERS
-# ===============================
-
-def is_instagram_link(text):
-
-    return "instagram.com" in text
-
-
-def extract_shortcode(url):
-
-    m = re.search(r"(?:p|reel|tv)/([^/?#&]+)", url)
-
-    return m.group(1) if m else None
-
-# ===============================
-# FETCH POST MEDIA
-# ===============================
-
-def fetch_post_media(url):
-
-    shortcode = extract_shortcode(url)
-
-    if not shortcode:
-        return None
+    username = job.username
+    log(f"Scraping: {username}")
 
     try:
 
-        post = Post.from_shortcode(loader.context, shortcode)
+        with sync_playwright() as p:
 
-        media = []
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage"
+                ]
+            )
 
-        if post.typename == "GraphSidecar":
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                viewport={"width":1280,"height":800},
+                locale="en-US"
+            )
 
-            for node in post.get_sidecar_nodes():
+            # add instagram session cookie
+            context.add_cookies([{
+                "name": "sessionid",
+                "value": IG_SESSIONID,
+                "domain": ".instagram.com",
+                "path": "/",
+                "httpOnly": True,
+                "secure": True,
+                "sameSite": "None"
+            }])
 
-                if node.is_video:
-                    media.append(("video", node.video_url))
-                else:
-                    media.append(("photo", node.display_url))
+            page = context.new_page()
 
-        elif post.is_video:
-            media.append(("video", post.video_url))
+            url = f"https://www.instagram.com/{username}/"
 
-        else:
-            media.append(("photo", post.url))
+            delay = random.uniform(4,7)
+            print("Delay:", delay)
+            time.sleep(delay)
 
-        return media
+            url = f"https://www.instagram.com/{username}/"
+            page.goto(url, wait_until="domcontentloaded")
+
+            time.sleep(5)
+
+            log(f"Current URL: {page.url}")
+
+            if "login" in page.url:
+                log("Instagram redirected to login")
+                return
+            if "suspended" in page.url:
+                log("instagram block the session")
+                return
+            
+            try:
+                page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
+            except:
+                print("Posts not visible yet, trying scroll...")
+
+            for _ in range(20):
+
+                if not job.running:
+                    break
+
+                links = page.evaluate("""
+                    Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
+                    .map(a => a.href)
+                """)
+
+                for link in links:
+                    link = link.split("?")[0]
+
+                    if link not in job.posts:
+                        job.posts.append(link)
+
+                print("Collected posts:", len(job.posts))
+
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(3)
+
+            browser.close()
 
     except Exception as e:
 
-        logger.error(e)
-
-        return None
-
-# ===============================
-# FETCH PROFILE POSTS
-# ===============================
-
-def fetch_profile_posts(username, start=0, limit=10):
+        log(f"Scraper error: {e}")
+# =========================
+# MEDIA FETCH
+# =========================
+def fetch_media(post_url):
 
     try:
 
-        profile = loader.check_profile_id(username)
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
 
-        posts = []
+        r = requests.get(post_url, headers=headers, timeout=15)
 
-        for i, post in enumerate(profile.get_posts()):
+        html = r.text
 
-            if i < start:
-                continue
+        video = re.search(r'property="og:video" content="([^"]+)"', html)
+        image = re.search(r'property="og:image" content="([^"]+)"', html)
 
-            if len(posts) >= limit:
-                break
+        items = []
 
-            if post.is_video:
-                posts.append(("video", post.video_url))
-            else:
-                posts.append(("photo", post.url))
+        if video:
+            items.append(("video", video.group(1)))
 
-        return posts
+        if image:
+            items.append(("photo", image.group(1)))
+
+        return items
 
     except Exception as e:
 
-        logger.error(e)
+        log(f"Media error: {e}")
+        return []
+# =========================
+# START COMMAND
+# =========================
 
-        return None
+@bot.message_handler(commands=["start"])
+def start(message):
 
-# ===============================
-# START
-# ===============================
-
-async def start(update, context):
-
-    user = update.effective_user
-
-    log_user(user)
-
-    if get_admin() is None:
-
-        set_admin(user.id)
-
-        await update.message.reply_text("You are now admin.")
-
-    await update.message.reply_text(
-        "Send Instagram username or post link."
+    bot.send_message(
+        message.chat.id,
+        "Send Instagram username"
     )
 
-# ===============================
-# HANDLE USER MESSAGE
-# ===============================
+# =========================
+# USERNAME HANDLER
+# =========================
 
-async def handle_message(update, context):
+@bot.message_handler(func=lambda m: True)
+def profile_handler(message):
 
-    user = update.effective_user
+    username = message.text.strip()
 
-    log_user(user)
+    job = Job(username)
+    user_jobs[message.chat.id] = job
 
-    text = update.message.text.strip()
+    thread = threading.Thread(
+        target=scrape_background,
+        args=(job,)
+    )
 
-    await update.message.chat.send_action(ChatAction.TYPING)
+    thread.start()
 
-    # --------------------------------
-    # INSTAGRAM LINK MODE
-    # --------------------------------
+    markup = InlineKeyboardMarkup()
 
-    if is_instagram_link(text):
+    markup.add(
+        InlineKeyboardButton("Download 10 Posts", callback_data="next"),
+        InlineKeyboardButton("Cancel", callback_data="cancel")
+    )
 
-        media = fetch_post_media(text)
+    bot.send_message(
+        message.chat.id,
+        "Scraping started.\nPress download to receive posts.",
+        reply_markup=markup
+    )
 
-        if not media:
-            await update.message.reply_text("Failed to fetch media")
-            return
+# =========================
+# CANCEL
+# =========================
 
-        for mtype, url in media:
+@bot.callback_query_handler(func=lambda call: call.data == "cancel")
+def cancel(call):
 
-            if mtype == "video":
-                await context.bot.send_video(update.effective_chat.id, url)
-            else:
-                await context.bot.send_photo(update.effective_chat.id, url)
+    job = user_jobs.get(call.message.chat.id)
 
+    if job:
+        job.running = False
+
+    bot.send_message(call.message.chat.id,"Scraping stopped.")
+
+# =========================
+# SEND POSTS
+# =========================
+@bot.callback_query_handler(func=lambda call: call.data == "next")
+def send_next(call):
+
+    job = user_jobs.get(call.message.chat.id)
+
+    if not job:
+        bot.send_message(call.message.chat.id, "No active job")
         return
 
-    # --------------------------------
-    # USERNAME MODE
-    # --------------------------------
-
-    username = text.replace("@","")
-
-    await update.message.reply_text("Checking profile...")
-
-    time.sleep(random.uniform(4,7))
-
-    posts = fetch_profile_posts(username,0,10)
+    start = job.sent
+    end = start + 10
+    posts = job.posts[start:end]
 
     if not posts:
-        await update.message.reply_text("Profile not found or private.")
+        bot.send_message(call.message.chat.id, "Still collecting posts...")
         return
 
-    profile_state[user.id] = {
-        "username": username,
-        "offset": 10
-    }
+    from io import BytesIO
+    from PIL import Image
 
-    for mtype, url in posts:
+    for post_url in posts:
 
-        if mtype == "video":
-            await context.bot.send_video(update.effective_chat.id, url)
-        else:
-            await context.bot.send_photo(update.effective_chat.id, url)
+        medias = fetch_media(post_url)
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Next 10 ▶️", callback_data="next")]
-    ])
+        if not medias:
+            bot.send_message(call.message.chat.id, post_url)
+            continue
 
-    await update.message.reply_text("Load more?", reply_markup=keyboard)
+        for media_type, media_url in medias:
 
-# ===============================
-# NEXT POSTS BUTTON
-# ===============================
+            log(f"Checking post: {post_url}")
+            log(f"Media type: {media_type}")
+            log(f"Media URL: {media_url}")
 
-async def next_posts(update, context):
+            if not media_url:
+                bot.send_message(call.message.chat.id, post_url)
+                continue
 
-    query = update.callback_query
+            media_url = media_url.replace("&amp;", "&")
+            media_url = media_url.replace(".heic", ".jpg")
 
-    await query.answer()
+            log(f"Final media URL: {media_url}")
 
-    user_id = query.from_user.id
+            try:
 
-    if user_id not in profile_state:
+                page = browser.new_page()
 
-        await query.message.reply_text("Session expired.")
-        return
+                response = page.goto(media_url, timeout=60000)
 
-    username = profile_state[user_id]["username"]
+                if not response:
+                    raise Exception("No response from CDN")
 
-    offset = profile_state[user_id]["offset"]
+                content = response.body()
 
-    posts = fetch_profile_posts(username, offset, 10)
+                file = BytesIO(content)
 
-    if not posts:
+                if media_type == "video":
 
-        await query.message.reply_text("No more posts.")
-        return
+                    file.name = "video.mp4"
+                    bot.send_video(call.message.chat.id, file)
 
-    profile_state[user_id]["offset"] += 10
+                elif media_type == "photo":
 
-    for mtype, url in posts:
+                    img = Image.open(file).convert("RGB")
 
-        if mtype == "video":
-            await context.bot.send_video(user_id, url)
-        else:
-            await context.bot.send_photo(user_id, url)
+                    jpeg = BytesIO()
+                    img.save(jpeg, format="JPEG")
+                    jpeg.seek(0)
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Next 10 ▶️", callback_data="next")]
-    ])
+                    bot.send_photo(call.message.chat.id, jpeg)
 
-    await context.bot.send_message(user_id,"Load more?",reply_markup=keyboard)
+                page.close()
 
-# ===============================
-# MAIN
-# ===============================
+            except Exception as e:
 
-def main():
+                log(f"Telegram error: {e}")
+                bot.send_message(call.message.chat.id, post_url)
 
-    app = Application.builder().token(TOKEN).build()
+            time.sleep(random.uniform(1.5, 3))
 
-    app.add_handler(CommandHandler("start", start))
+    job.sent += len(posts)
 
-    app.add_handler(CallbackQueryHandler(next_posts, pattern="next"))
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton("Next 10", callback_data="next"),
+        InlineKeyboardButton("Cancel", callback_data="cancel")
+    )
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    bot.send_message(
+        call.message.chat.id,
+        f"Sent {job.sent} posts",
+        reply_markup=markup
+    )
+# =========================
+# RUN BOT
+# =========================
 
-    print("Bot running...")
+print("Bot started")
 
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+bot.infinity_polling()
