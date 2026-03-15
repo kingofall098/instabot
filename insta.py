@@ -52,6 +52,7 @@ print("Starting browser...")
 
 play = sync_playwright().start()
 
+# Launch persistent browser profile
 browser = play.chromium.launch_persistent_context(
     user_data_dir="./ig_profile",
     headless=True,
@@ -62,35 +63,11 @@ browser = play.chromium.launch_persistent_context(
     ]
 )
 
+# Open a page
 page = browser.new_page()
 
-page.goto("https://www.instagram.com/")
-# Create context
-context = browser.new_context()
-
-# Add session cookie
-context.add_cookies([{
-    "name": "sessionid",
-    "value": IG_SESSIONID,
-    "domain": ".instagram.com",
-    "path": "/",
-    "httpOnly": True,
-    "secure": True,
-    "sameSite": "None"
-}])
-# Create page
-page = context.new_page()
-
-# Visit Instagram first
+# Visit Instagram so the saved session loads
 page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
-
-# Add session cookie AFTER visiting the site
-context.add_cookies([{
-    "name": "sessionid",
-    "value": IG_SESSIONID,
-    "domain": ".instagram.com",
-    "path": "/"
-}])
 
 # Reload so session activates
 page.reload()
