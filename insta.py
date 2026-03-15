@@ -103,16 +103,25 @@ def scrape_background(job):
         if "login" in page.url:
             log("Instagram redirected to login")
             return
-        page.wait_for_selector('a[href^="/p/"], a[href^="/reel/"]', timeout=30000)
+        # wait until page loads
+        page.wait_for_load_state("networkidle")
+
+        # small delay for JS rendering
+        time.sleep(3)
+
+        # scroll once to trigger posts loading
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(3)
 
         for _ in range(15):
 
             if not job.running:
                 break
-
+            log("Scanning page for posts...")
             links = page.evaluate("""
-                Array.from(document.querySelectorAll('a[href^="/p/"], a[href^="/reel/"]'))
-                .map(a => a.href)
+                Array.from(document.querySelectorAll('a'))
+                    .map(a => a.href)
+                    .filter(h => h.includes('/p/') || h.includes('/reel/'))
             """)
 
             for link in links:
