@@ -33,7 +33,33 @@ job_queue = Queue()
 # =========================
 # LOG FUNCTION
 # =========================
+def load_instaloader_cookies(loader):
 
+    with open("cookies.txt", "r") as f:
+
+        for line in f:
+
+            if line.startswith("#"):
+                continue
+
+            parts = line.strip().split("\t")
+
+            if len(parts) < 7:
+                continue
+
+            domain = parts[0]
+            path = parts[2]
+            name = parts[5]
+            value = parts[6]
+
+            loader.context._session.cookies.set(
+                name,
+                value,
+                domain=domain,
+                path=path
+            )
+
+    log("Instaloader cookies loaded")
 
 def detect_instagram_state(page):
 
@@ -119,7 +145,7 @@ L = instaloader.Instaloader(
     download_video_thumbnails=False,
     save_metadata=False
 )
-
+load_instaloader_cookies(L)
 print("Instaloader session active")
 # =========================
 # START PLAYWRIGHT
