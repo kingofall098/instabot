@@ -1,4 +1,4 @@
-#USERNAM TO MEDIA INSTA BOT(OG)
+#2USERNAM TO MEDIA INSTA BOT(OG)
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from playwright.sync_api import sync_playwright
@@ -33,33 +33,7 @@ job_queue = Queue()
 # =========================
 # LOG FUNCTION
 # =========================
-def load_instaloader_cookies(loader):
 
-    with open("cookies.txt", "r") as f:
-
-        for line in f:
-
-            if line.startswith("#"):
-                continue
-
-            parts = line.strip().split("\t")
-
-            if len(parts) < 7:
-                continue
-
-            domain = parts[0]
-            path = parts[2]
-            name = parts[5]
-            value = parts[6]
-
-            loader.context._session.cookies.set(
-                name,
-                value,
-                domain=domain,
-                path=path
-            )
-
-    log("Instaloader cookies loaded")
 
 def detect_instagram_state(page):
 
@@ -75,12 +49,8 @@ def detect_instagram_state(page):
     log(f"Page title: {title}")
 
     # LOGIN WALL
-    if "accounts/login" in url:
+    if "accounts/login" in url or "Log in" in body:
         return "LOGIN_REQUIRED"
-
-    # CHECK IF POSTS EXIST
-    if page.query_selector("article") is None:
-        return "EMPTY_PAGE"
 
     # SESSION EXPIRED
     if "Please log in" in body:
@@ -108,33 +78,29 @@ def log(msg):
     print(f"[{t}] {msg}")
     
 # SESSION FUNCTION
-def load_cookies(context):
-
-    cookies = []
+def load_session_from_cookie():
 
     with open("cookies.txt", "r") as f:
+
         for line in f:
 
-            if line.startswith("#"):
+            if "sessionid" not in line:
                 continue
 
             parts = line.strip().split("\t")
 
-            if len(parts) < 7:
-                continue
+            if len(parts) >= 7 and parts[-2] == "sessionid":
 
-            cookies.append({
-                "domain": parts[0],
-                "path": parts[2],
-                "name": parts[5],
-                "value": parts[6],
-                "secure": True
-            })
+                session = parts[-1]
 
-    context.add_cookies(cookies)
+                log(f"Loaded session: {session[:20]}...")
+                return session
+
+
+    raise Exception("sessionid not found in cookies.txt")
 import os
 print("Files in project:", os.listdir())
-
+IG_SESSIONID = load_session_from_cookie()
 # =========================
 # INSTALOADER
 # =========================
@@ -146,15 +112,11 @@ L = instaloader.Instaloader(
     save_metadata=False
 )
 
-load_instaloader_cookies(L)
-
-L.context._session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-    "X-IG-App-ID": "936619743392459",
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer": "https://www.instagram.com/",
-    "Accept": "*/*"
-})
+L.context._session.cookies.set(
+    "sessionid",
+    IG_SESSIONID,
+    domain=".instagram.com"
+)
 print("Instaloader session active")
 # =========================
 # START PLAYWRIGHT
@@ -209,25 +171,21 @@ def extract_media(post):
 
 def get_post_from_url(post_url):
 
-    shortcode = post_url.split("/")[4]
+    try:
 
-    for i in range(5):
+        shortcode = post_url.split("/")[4]
 
-        try:
+        post = instaloader.Post.from_shortcode(
+            L.context,
+            shortcode
+        )
 
-            post = instaloader.Post.from_shortcode(
-                L.context,
-                shortcode
-            )
+        return post
 
-            return post
+    except Exception as e:
 
-        except Exception as e:
-
-            log(f"Instaloader retry {i+1}: {e}")
-            time.sleep(random.uniform(3,6))
-
-    return None
+        log(f"Instaloader error: {e}")
+        return None
 # =========================
 # SCRAPER
 # =========================
@@ -239,20 +197,22 @@ def scrape_background(job, context):
     
     try:
         #create new page
-        page = context.new_page()
+        page = context.new_page() 
 
+        #build profile url
         url = f"https://www.instagram.com/{username}/"
 
-        for attempt in range(3):
+        
+        #open profile
+        page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+        time.sleep(3)
 
-            try:
-                page.goto(url, wait_until="networkidle")
-                page.wait_for_selector("header, main, article", timeout=20000)
-                break
+        page.goto(url, wait_until="domcontentloaded")
 
-            except:
-                log("Retry loading profile...")
-                time.sleep(5)
+        time.sleep(3)
+
+        # wait for instagram app container
+        page.wait_for_selector("main", timeout=30000)
 
         log("Main container loaded")
 
@@ -425,24 +385,23 @@ def playwright_worker():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
             viewport={"width": 1280, "height": 900}
         )
-        load_cookies(context)
 
-    #     context.add_cookies([
-    #     {
-    #         "name": "sessionid",
-    #         "value": IG_SESSIONID,
-    #         "domain": ".instagram.com",
-    #         "path": "/",
-    #         "httpOnly": True,
-    #         "secure": True
-    #     },
-    #     {
-    #         "name": "csrftoken",
-    #         "value": "missing",
-    #         "domain": ".instagram.com",
-    #         "path": "/"
-    #     }
-    # ])
+        context.add_cookies([
+        {
+            "name": "sessionid",
+            "value": IG_SESSIONID,
+            "domain": ".instagram.com",
+            "path": "/",
+            "httpOnly": True,
+            "secure": True
+        },
+        {
+            "name": "csrftoken",
+            "value": "missing",
+            "domain": ".instagram.com",
+            "path": "/"
+        }
+    ])
 
         page = context.new_page()
         page.goto("https://www.instagram.com/")
