@@ -1,4 +1,4 @@
-#FORWARD INSTA POST LINKS
+#2FORWARD INSTA POST LINKS 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from playwright.sync_api import sync_playwright
@@ -195,12 +195,7 @@ def profile_handler(message):
     job = Job(username)
     user_jobs[message.chat.id] = job
 
-    thread = threading.Thread(
-        target=scrape_background,
-        args=(job,)
-    )
-
-    thread.start()
+    scrape_background(job)
 
     markup = InlineKeyboardMarkup()
 
