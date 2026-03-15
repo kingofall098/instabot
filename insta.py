@@ -105,7 +105,7 @@ def load_cookies(context):
     context.add_cookies(cookies)
 import os
 print("Files in project:", os.listdir())
-IG_SESSIONID = load_cookies()
+
 # =========================
 # INSTALOADER
 # =========================
@@ -117,12 +117,8 @@ L = instaloader.Instaloader(
     save_metadata=False
 )
 
-L.context._session.cookies.set(
-    "sessionid",
-    IG_SESSIONID,
-    domain=".instagram.com"
-)
-print("Instaloader session active")
+
+# print("Instaloader session active")
 # =========================
 # START PLAYWRIGHT
 # =========================
@@ -390,7 +386,7 @@ def playwright_worker():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
             viewport={"width": 1280, "height": 900}
         )
-        load_cookies(context)
+        
 
         context.add_cookies([
         {
@@ -408,7 +404,9 @@ def playwright_worker():
             "path": "/"
         }
     ])
-
+        # LOAD COOKIES HERE
+        load_cookies(context)
+        
         page = context.new_page()
         page.goto("https://www.instagram.com/")
 
