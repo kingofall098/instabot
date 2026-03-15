@@ -40,16 +40,18 @@ user_jobs = {}
 
 import requests
 import re
+import json
 
 def get_user_posts(username):
 
     print("\n=== FETCHING PROFILE ===")
     print("Username:", username)
 
-    url = f"https://www.instagram.com/{username}/"
+    url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "*/*"
     }
 
     r = requests.get(url, headers=headers)
@@ -57,20 +59,30 @@ def get_user_posts(username):
     print("Status code:", r.status_code)
 
     if r.status_code != 200:
+        print("Profile request failed")
         return []
 
-    html = r.text
-
-    shortcodes = re.findall(r'"shortcode":"(.*?)"', html)
+    data = r.json()
 
     posts = []
 
-    for code in shortcodes:
+    try:
 
-        post_url = f"https://www.instagram.com/p/{code}/"
+        edges = data["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
 
-        if post_url not in posts:
+        print("Edges found:", len(edges))
+
+        for edge in edges:
+
+            shortcode = edge["node"]["shortcode"]
+
+            post_url = f"https://www.instagram.com/p/{shortcode}/"
+
             posts.append(post_url)
+
+    except Exception as e:
+
+        print("Parsing error:", e)
 
     print("Collected posts:", len(posts))
 
