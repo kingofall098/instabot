@@ -375,8 +375,6 @@ def send_next(call):
                     bot.send_photo(
                         call.message.chat.id,
                         jpeg,
-                        width=1080,
-                        height=1080
                     )
 
             except Exception as e:
@@ -411,4 +409,3 @@ threading.Thread(
 ).start()
 
 bot.infinity_polling()
-
