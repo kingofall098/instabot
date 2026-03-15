@@ -78,28 +78,34 @@ def log(msg):
     print(f"[{t}] {msg}")
     
 # SESSION FUNCTION
-def load_session_from_cookie():
+def load_cookies(context):
+
+    cookies = []
 
     with open("cookies.txt", "r") as f:
 
         for line in f:
 
-            if "sessionid" not in line:
+            if line.startswith("#"):
                 continue
 
             parts = line.strip().split("\t")
 
-            if len(parts) >= 7 and parts[-2] == "sessionid":
+            if len(parts) < 7:
+                continue
 
-                session = parts[-1]
+            cookies.append({
+                "domain": parts[0],
+                "path": parts[2],
+                "name": parts[5],
+                "value": parts[6],
+                "secure": True
+            })
 
-                log(f"Loaded session: {session[:20]}...")
-                return session
-
-    raise Exception("sessionid not found in cookies.txt")
+    context.add_cookies(cookies)
 import os
 print("Files in project:", os.listdir())
-IG_SESSIONID = load_session_from_cookie()
+IG_SESSIONID = load_cookies()
 # =========================
 # INSTALOADER
 # =========================
@@ -384,6 +390,7 @@ def playwright_worker():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
             viewport={"width": 1280, "height": 900}
         )
+        load_cookies(context)
 
         context.add_cookies([
         {
