@@ -8,7 +8,7 @@ TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 
 bot = telebot.TeleBot(TOKEN)
 
-SESSIONID = open("session.txt").read().strip()
+SESSIONID = open("cookies.txt").read().strip()
 
 print("Loaded session:", SESSIONID[:10], "...")
 
