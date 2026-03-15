@@ -16,7 +16,7 @@ bot = telebot.TeleBot(TOKEN)
 # INSTAGRAM SESSION
 # =========================
 
-SESSIONID = open("session.txt").read().strip()
+SESSIONID = open("cookies.txt").read().strip()
 
 # =========================
 # GET INSTAGRAM POSTS
