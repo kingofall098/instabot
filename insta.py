@@ -53,7 +53,7 @@ print("Starting browser...")
 play = sync_playwright().start()
 
 # Launch persistent browser profile
-browser = play.chromium.launch_persistent_browser(
+browser = play.chromium.launch_persistent_context(
     user_data_dir="./ig_profile",
     headless=True,
     args=[
@@ -64,13 +64,13 @@ browser = play.chromium.launch_persistent_browser(
 )
 
 # Open a page
-page = browser.new_page()
+page = browser.new_context()
 
 # Visit Instagram so the saved session loads
 page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
 
 # Reload so session activates
-page.reload()
+# page.reload()
 
 # =========================
 # SCRAPER
