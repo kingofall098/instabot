@@ -15,7 +15,7 @@ from io import BytesIO
 # =========================
 
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
-bot = telebot.TeleBot(TOKEN, threaded=False)
+bot = telebot.TeleBot(TOKEN, threaded=True)
 
 # =========================
 # INSTAGRAM SESSION
@@ -110,9 +110,8 @@ log("Instagram session activated")
 # =========================
 
 def scrape_background(job):
-
     username = job.username
-    log(f"Scraping: {username}")
+    log(f"Scraping started for {username}")
 
     try:
 
@@ -253,11 +252,7 @@ def profile_handler(message):
     user_jobs[message.chat.id] = job
 
     # start scraper in background
-    threading.Thread(
-        target=scrape_background,
-        args=(job,),
-        daemon=True
-    ).start()
+    scrape_background(job)
 
     markup = InlineKeyboardMarkup()
 
