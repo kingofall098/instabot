@@ -62,6 +62,9 @@ browser = play.chromium.launch_persistent_context(
     ]
 )
 
+page = browser.new_page()
+
+page.goto("https://www.instagram.com/")
 # Create context
 context = browser.new_context()
 
