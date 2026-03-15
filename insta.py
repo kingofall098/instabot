@@ -81,23 +81,6 @@ page = context.new_page()
 # Activate session
 page.goto("https://www.instagram.com/")
 
-# open instagram first
-page.goto("https://www.instagram.com")
-
-# add session cookie
-browser.add_cookies([{
-    "name": "sessionid",
-    "value": IG_SESSIONID,
-    "domain": ".instagram.com",
-    "path": "/",
-    "httpOnly": True,
-    "secure": True,
-    "sameSite": "None"
-}])
-
-# reload so session activates
-page.goto("https://www.instagram.com/")
-
 # =========================
 # SCRAPER
 # =========================
@@ -126,7 +109,7 @@ def scrape_background(job):
             log("Instagram redirected to login")
             return
 
-        page.wait_for_selector('a[href*="/p/"], a[href*="/reel/"]', timeout=30000)
+        page.wait_for_selector('a[href^="/p/"], a[href^="/reel/"]', timeout=30000)
 
         for _ in range(15):
 
@@ -134,7 +117,7 @@ def scrape_background(job):
                 break
 
             links = page.evaluate("""
-                Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
+                Array.from(document.querySelectorAll('a[href^="/p/"], a[href^="/reel/"]'))
                 .map(a => a.href)
             """)
 
@@ -294,25 +277,19 @@ def send_next(call):
 
             try:
 
-                page = browser.new_page()
-
                 response = requests.get(media_url, timeout=30)
 
-                content = BytesIO(response.content)
+                if response.status_code != 200:
+                    raise Exception("Media download failed")
 
-                if not response:
-                    raise Exception("No response from CDN")
-
-                content = response.body()
-
-                file = BytesIO(content)
+                file = BytesIO(response.content)
 
                 if media_type == "video":
 
                     file.name = "video.mp4"
                     bot.send_video(call.message.chat.id, file)
 
-                elif media_type == "photo":
+                else:
 
                     img = Image.open(file).convert("RGB")
 
@@ -321,8 +298,6 @@ def send_next(call):
                     jpeg.seek(0)
 
                     bot.send_photo(call.message.chat.id, jpeg)
-
-                page.close()
 
             except Exception as e:
 
