@@ -48,9 +48,10 @@ def log(msg):
 def load_session_from_cookie():
 
     with open("cookies.txt", "r") as f:
+
         for line in f:
 
-            if line.startswith("#"):
+            if "sessionid" not in line:
                 continue
 
             parts = line.strip().split("\t")
@@ -63,7 +64,8 @@ def load_session_from_cookie():
                 return session
 
     raise Exception("sessionid not found in cookies.txt")
-
+import os
+print("Files in project:", os.listdir())
 IG_SESSIONID = load_session_from_cookie()
 # =========================
 # START PLAYWRIGHT
