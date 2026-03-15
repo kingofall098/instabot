@@ -78,34 +78,28 @@ def log(msg):
     print(f"[{t}] {msg}")
     
 # SESSION FUNCTION
-def load_cookies(context):
-
-    cookies = []
+def load_session_from_cookie():
 
     with open("cookies.txt", "r") as f:
 
         for line in f:
 
-            if line.startswith("#"):
+            if "sessionid" not in line:
                 continue
 
             parts = line.strip().split("\t")
 
-            if len(parts) < 7:
-                continue
+            if len(parts) >= 7 and parts[-2] == "sessionid":
 
-            cookies.append({
-                "domain": parts[0],
-                "path": parts[2],
-                "name": parts[5],
-                "value": parts[6],
-                "secure": True
-            })
+                session = parts[-1]
 
-    context.add_cookies(cookies)
+                log(f"Loaded session: {session[:20]}...")
+                return session
+
+    raise Exception("sessionid not found in cookies.txt")
 import os
 print("Files in project:", os.listdir())
-
+IG_SESSIONID = load_session_from_cookie()
 # =========================
 # INSTALOADER
 # =========================
@@ -117,8 +111,12 @@ L = instaloader.Instaloader(
     save_metadata=False
 )
 
-
-# print("Instaloader session active")
+L.context._session.cookies.set(
+    "sessionid",
+    IG_SESSIONID,
+    domain=".instagram.com"
+)
+print("Instaloader session active")
 # =========================
 # START PLAYWRIGHT
 # =========================
@@ -312,9 +310,9 @@ def scrape_background(job, context):
                 break
             log("Scanning page for posts...")
             links = page.evaluate("""
-                Array.from(document.querySelectorAll('a'))
-                    .map(a => a.href)
-                    .filter(h => h.includes('/p/') || h.includes('/reel/'))
+            Array.from(document.querySelectorAll('article a'))
+            .map(a => "https://www.instagram.com" + a.getAttribute("href"))
+            .filter(h => h.includes('/p/') || h.includes('/reel/'))
             """)
 
             new_posts = 0
@@ -382,24 +380,18 @@ def playwright_worker():
             ]
         )
 
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-            viewport={"width": 1280, "height": 900}
-        )
-        
+        context = browser.new_context()
 
-        context.add_cookies([
-        
-        {
-            "name": "csrftoken",
-            "value": "missing",
+        context.add_cookies([{
+            "name": "sessionid",
+            "value": IG_SESSIONID,
             "domain": ".instagram.com",
-            "path": "/"
-        }
-    ])
-        # LOAD COOKIES HERE
-        load_cookies(context)
-        
+            "path": "/",
+            "httpOnly": True,
+            "secure": True,
+            "sameSite": "None"
+        }])
+
         page = context.new_page()
         page.goto("https://www.instagram.com/")
 
