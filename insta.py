@@ -78,10 +78,6 @@ def detect_instagram_state(page):
     if "accounts/login" in url:
         return "LOGIN_REQUIRED"
 
-    # CHECK IF POSTS EXIST
-    if page.query_selector("article") is None:
-        return "EMPTY_PAGE"
-
     # SESSION EXPIRED
     if "Please log in" in body:
         return "SESSION_EXPIRED"
@@ -253,7 +249,7 @@ def scrape_background(job, context):
 
             try:
                 page.goto(url, wait_until="domcontentloaded")
-                page.wait_for_selector("header, main, article", timeout=20000)
+                page.wait_for_selector("header", timeout=20000)
                 break
 
             except:
@@ -309,25 +305,25 @@ def scrape_background(job, context):
             return
 
         # wait for posts grid
+        log("Waiting for post grid...")
+
         try:
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(3)
+            page.wait_for_selector("article a", timeout=30000)
+        except:
+            log("Grid not detected yet, scrolling to trigger loading")
 
-            page.wait_for_selector("article", timeout=20000)
+            for i in range(5):
 
-        except Exception as e:
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(4)
 
-            log("Post grid not detected")
+                if page.query_selector("article a") is not None:
+                    log("Post grid detected after scroll")
+                    break
 
-            html_preview = page.content()[:1000]
-            log("HTML preview:")
-            log(html_preview)
-
-            state = detect_instagram_state(page)
-            log(f"Page diagnostic result: {state}")
-
-            page.close()
-            return
+            if page.query_selector("article a") is None:
+                log("Still no posts found")
+                return
 
         time.sleep(2)
 
