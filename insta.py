@@ -344,7 +344,14 @@ def send_next(call):
                 if media_type == "video":
 
                     file.name = "video.mp4"
-                    bot.send_video(call.message.chat.id, file)
+
+                    bot.send_video(
+                        call.message.chat.id,
+                        file,
+                        width=720,
+                        height=1280,
+                        supports_streaming=True
+                    )
 
                 else:
 
@@ -354,7 +361,12 @@ def send_next(call):
                     img.save(jpeg, format="JPEG")
                     jpeg.seek(0)
 
-                    bot.send_photo(call.message.chat.id, jpeg)
+                    bot.send_photo(
+                        call.message.chat.id,
+                        jpeg,
+                        width=1080,
+                        height=1080
+                    )
 
             except Exception as e:
 
