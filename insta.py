@@ -145,7 +145,16 @@ L = instaloader.Instaloader(
     download_video_thumbnails=False,
     save_metadata=False
 )
+
 load_instaloader_cookies(L)
+
+L.context._session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    "X-IG-App-ID": "936619743392459",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://www.instagram.com/",
+    "Accept": "*/*"
+})
 print("Instaloader session active")
 # =========================
 # START PLAYWRIGHT
@@ -200,21 +209,25 @@ def extract_media(post):
 
 def get_post_from_url(post_url):
 
-    try:
+    shortcode = post_url.split("/")[4]
 
-        shortcode = post_url.split("/")[4]
+    for i in range(5):
 
-        post = instaloader.Post.from_shortcode(
-            L.context,
-            shortcode
-        )
+        try:
 
-        return post
+            post = instaloader.Post.from_shortcode(
+                L.context,
+                shortcode
+            )
 
-    except Exception as e:
+            return post
 
-        log(f"Instaloader error: {e}")
-        return None
+        except Exception as e:
+
+            log(f"Instaloader retry {i+1}: {e}")
+            time.sleep(random.uniform(3,6))
+
+    return None
 # =========================
 # SCRAPER
 # =========================
