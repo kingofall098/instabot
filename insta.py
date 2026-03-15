@@ -74,43 +74,12 @@ IG_SESSIONID = load_session_from_cookie()
 
 print("Starting browser...")
 
-play = sync_playwright().start()
-
-browser = play.chromium.launch(
-    headless=True,
-    args=[
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-        "--disable-dev-shm-usage"
-    ]
-)
-
-context = browser.new_context()
-
-# inject instagram session cookie
-context.add_cookies([{
-    "name": "sessionid",
-    "value": IG_SESSIONID,
-    "domain": ".instagram.com",
-    "path": "/",
-    "httpOnly": True,
-    "secure": True,
-    "sameSite": "None"
-}])
-
-# open page after cookie is set
-page = context.new_page()
-
-# visit instagram to activate session
-page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
-
-log("Instagram session activated")
 
 # =========================
 # SCRAPER
 # =========================
 
-def scrape_background(job):
+def scrape_background(job, context):
     username = job.username
     log(f"Scraping started for {username}")
 
@@ -153,7 +122,7 @@ def scrape_background(job):
         """)
         time.sleep(random.uniform(4,6))
 
-        for _ in range(40):
+        for _ in range(20):
 
             if not job.running:
                 break
@@ -198,19 +167,49 @@ def scrape_background(job):
 
 def playwright_worker():
 
-    while True:
+    log("Starting browser in worker thread...")
 
-        job = job_queue.get()
+    with sync_playwright() as play:
 
-        if job is None:
-            break
+        browser = play.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+        )
 
-        try:
-            scrape_background(job)
-        except Exception as e:
-            log(f"Worker error: {e}")
+        context = browser.new_context()
 
-        job_queue.task_done()
+        context.add_cookies([{
+            "name": "sessionid",
+            "value": IG_SESSIONID,
+            "domain": ".instagram.com",
+            "path": "/",
+            "httpOnly": True,
+            "secure": True,
+            "sameSite": "None"
+        }])
+
+        page = context.new_page()
+        page.goto("https://www.instagram.com/")
+
+        log("Instagram session activated")
+
+        while True:
+
+            job = job_queue.get()
+
+            if job is None:
+                break
+
+            try:
+                scrape_background(job, context)
+            except Exception as e:
+                log(f"Worker error: {e}")
+
+            job_queue.task_done()
 # =========================
 # MEDIA FETCH
 # =========================
@@ -270,8 +269,6 @@ def profile_handler(message):
 
     # start scraper in background
     job_queue.put(job)
-
-    time.sleep(1)
 
     markup = InlineKeyboardMarkup()
 
@@ -415,4 +412,3 @@ threading.Thread(
 
 bot.infinity_polling()
 
-bot.infinity_polling()
