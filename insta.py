@@ -223,19 +223,41 @@ def fetch_media(post_url):
         }
 
         r = requests.get(post_url, headers=headers, timeout=15)
-
         html = r.text
-
-        video = re.search(r'property="og:video" content="([^"]+)"', html)
-        image = re.search(r'property="og:image" content="([^"]+)"', html)
 
         items = []
 
-        if video:
-            items.append(("video", video.group(1)))
+        # Extract JSON block
+        data_match = re.search(r'window\._sharedData = (.*?);</script>', html)
 
-        if image:
-            items.append(("photo", image.group(1)))
+        if not data_match:
+            return items
+
+        data = json.loads(data_match.group(1))
+
+        media = data["entry_data"]["PostPage"][0]["graphql"]["shortcode_media"]
+
+        # VIDEO
+        if media["is_video"]:
+            items.append(("video", media["video_url"]))
+
+        # SINGLE IMAGE
+        elif "display_url" in media:
+            items.append(("photo", media["display_url"]))
+
+        # CAROUSEL
+        if "edge_sidecar_to_children" in media:
+
+            edges = media["edge_sidecar_to_children"]["edges"]
+
+            for edge in edges:
+
+                node = edge["node"]
+
+                if node["is_video"]:
+                    items.append(("video", node["video_url"]))
+                else:
+                    items.append(("photo", node["display_url"]))
 
         return items
 
@@ -312,6 +334,7 @@ def send_next(call):
     start = job.sent
     end = start + 10
     posts = job.posts[start:end]
+    bot.send_message(call.message.chat.id, "Downloading media...")
 
     # if not posts:
     #     bot.send_message(call.message.chat.id, "Still collecting posts...")
@@ -345,7 +368,7 @@ def send_next(call):
 
             try:
 
-                response = requests.get(media_url, timeout=30)
+                response = requests.get(media_url, timeout=30, stream=True)
 
                 if response.status_code != 200:
                     raise Exception("Media download failed")
