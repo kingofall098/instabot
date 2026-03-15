@@ -1,4 +1,4 @@
-#3FORWARD INSTA POST LINKS 
+#USERNAM TO MEDIA INSTA BOT(OG)
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from playwright.sync_api import sync_playwright
@@ -16,10 +16,10 @@ import instaloader
 # BOT TOKEN
 # =========================
 
-TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
+TOKEN = "8665521420:AAHi0hfMNn3odVDCd9ajMCW_8FwrSz2OQLQ"
 bot = telebot.TeleBot(TOKEN, threaded=True)
 from queue import Queue
-
+user_jobs ={}
 job_queue = Queue()
 # =========================
 # INSTAGRAM SESSION
@@ -86,25 +86,25 @@ print("Instaloader session active")
 
 print("Starting browser...")
 
-def get_profile_posts(username, limit=100):
+# def get_profile_posts(username, limit=100):
 
-    posts = []
+#     posts = []
 
-    profile = instaloader.Profile.from_username(
-        L.context,
-        username
-    )
+#     profile = instaloader.Profile.from_username(
+#         L.context,
+#         username
+#     )
 
-    for post in profile.get_posts():
+#     for post in profile.get_posts():
 
-        posts.append(post)
+#         posts.append(post)
 
-        if len(posts) >= limit:
-            break
+#         if len(posts) >= limit:
+#             break
 
-    log(f"Collected {len(posts)} posts using Instaloader")
+#     log(f"Collected {len(posts)} posts using Instaloader")
 
-    return posts
+#     return posts
 def extract_media(post):
 
     items = []
@@ -201,7 +201,7 @@ def scrape_background(job, context):
                 break
             log("Scanning page for posts...")
             links = page.evaluate("""
-                Array.from(document.querySelectorAll('a'))
+                Array.from(document.querySelectorAll('a[href^="/p/"], a[href^="/reel/"]'))
                     .map(a => a.href)
                     .filter(h => h.includes('/p/') || h.includes('/reel/'))
             """)
@@ -338,6 +338,18 @@ def playwright_worker():
 
 #         log(f"Media error: {e}")
 #         return []
+
+# =========================
+# JOB SYSTEM
+# =========================
+
+class Job:
+    def __init__(self, username):
+        self.username = username
+        self.posts = []
+        self.sent = 0
+        self.running = True
+
 # =========================
 # START COMMAND
 # =========================
@@ -349,14 +361,6 @@ def start(message):
         message.chat.id,
         "Send Instagram username"
     )
-class Job:
-    def __init__(self, username):
-        self.username = username
-        self.posts = []
-        self.sent = 0
-        self.running = True
-user_jobs ={}
-job_queue = Queue()
 # =========================
 # USERNAME HANDLER
 # =========================
@@ -425,8 +429,8 @@ def send_next(call):
 
     for post_url in posts:
 
-        log(f"Processing: {post_url}")
-
+        log(f"Processing post URL: {post_url}")
+        time.sleep(random.uniform(1,2))
         post = get_post_from_url(post_url)
 
         if not post:
