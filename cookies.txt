@@ -1,4 +1,4 @@
-# http://curl.haxx.se/rfc/cookie_spec.html
+#http://curl.haxx.se/rfc/cookie_spec.html
 #HttpOnly_.instagram.com	TRUE	/	TRUE	1803768661	ps_n	1
 #HttpOnly_.instagram.com	TRUE	/	TRUE	1803768166	datr	ZvlzadM4qLfwrHxvhrgqiChg
 .instagram.com	TRUE	/	TRUE	1804978650	ig_nrcb	1
