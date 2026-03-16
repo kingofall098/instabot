@@ -62,7 +62,7 @@ def log(msg):
 #     raise Exception("sessionid not found in cookies.txt")
 import os
 print("Files in project:", os.listdir())
-IG_SESSIONID = load_session_from_cookie()
+# IG_SESSIONID = load_session_from_cookie()
 # =========================
 # INSTALOADER
 # =========================
