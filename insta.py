@@ -16,19 +16,55 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+def score_url(url):
+    score = 0
+    url = url.lower()
+
+    if "large" in url or "original" in url:
+        score += 3
+    if "media" in url:
+        score += 2
+    if len(url) > 100:
+        score += 1
+
+    return score
+def is_valid_media(url):
+    url = url.lower()
+
+    # must be media type
+    if not any(ext in url for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]):
+        return False
+
+    # reject common junk
+    bad_keywords = ["logo", "icon", "avatar", "thumb", "sprite", "ads", "banner"]
+
+    if any(bad in url for bad in bad_keywords):
+        return False
+
+    # reject very small images
+    if "s150x150" in url or "small" in url:
+        return False
+
+    return True
 def send_images(bot, chat_id, images):
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://www.google.com/"
     }
 
-    for i, img_url in enumerate(images[:5]):  # send first 5 in order
+    sent = 0
+
+    for img_url in images:
+        if sent >= 5:
+            break
+
         try:
             res = requests.get(img_url, headers=headers, timeout=10)
 
-            if res.status_code == 200 and len(res.content) > 1000:
+            if res.status_code == 200 and len(res.content) > 5000:
                 bot.send_photo(chat_id, res.content)
-                logging.info(f"Sent image {i+1}")
+                logging.info(f"Sent image {sent+1}")
+                sent += 1
             else:
                 logging.warning(f"Skipped bad image: {img_url}")
 
@@ -165,37 +201,26 @@ def dynamic_scrape(url):
 
     # ALWAYS runs
     # keep order + remove duplicates
+
+    # remove duplicates but keep order
     seen = set()
-    ordered_media = []
+    clean_media = []
 
     for u in media_urls:
         if u not in seen:
             seen.add(u)
-            ordered_media.append(u)
+            clean_media.append(u)
 
-    media_urls = ordered_media
+    media_urls = clean_media
 
-    if "twitter.com" in url or "x.com" in url:
-        images = [u for u in media_urls if "twimg.com/media" in u and "name=large" in u]
-        videos = [u for u in media_urls if ".mp4" in u]
+    # filter
+    images = [u for u in media_urls if is_valid_media(u) and any(ext in u for ext in [".jpg", ".png", ".webp"])]
+    videos = [u for u in media_urls if is_valid_media(u) and any(ext in u for ext in [".mp4", ".webm"])]
 
-    elif "instagram.com" in url:
-        images = [
-            u for u in media_urls
-            if "cdninstagram.com" in u and "s150x150" not in u
-        ]
-        videos = [u for u in media_urls if ".mp4" in u]
-
-    else:
-        images = [
-            u for u in media_urls
-            if (
-                any(ext in u.lower() for ext in [".jpg", ".png", ".webp"])
-                and not any(bad in u.lower() for bad in ["logo", "icon", "avatar", "thumb"])
-            )
-        ]
-        videos = [u for u in media_urls if any(ext in u.lower() for ext in [".mp4", ".webm"])]
-        logging.info(f"Final Images: {len(images)}")
+    # rank
+    images = sorted(images, key=score_url, reverse=True)
+    videos = sorted(videos, key=score_url, reverse=True)
+    logging.info(f"Final Images: {len(images)}")
     logging.info(f"Final Videos: {len(videos)}")
 
     return {
@@ -246,7 +271,7 @@ def handle(msg):
             send_videos(bot, msg.chat.id, data['videos'])
 
         # 🔥 SEND IMAGES
-        send_images(bot, msg.chat.id, data['images'])
+        # send_images(bot, msg.chat.id, data['images'])
         
     except Exception as e:
         logging.error(f"Error occurred: {str(e)}", exc_info=True)
