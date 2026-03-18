@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from urllib.parse import urljoin
-from playwright_stealth import stealth_sync
+from playwright_stealth import stealth
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN)
 import logging
@@ -205,8 +205,11 @@ def dynamic_scrape(url):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)  # ❗ important
             page = browser.new_page()
+            page.set_extra_http_headers({
+                "Accept-Language": "en-US,en;q=0.9"
+            })
 
-            stealth_sync(page)  # 🔥 bypass detection
+            stealth(page)  # 🔥 bypass detection
 
             def handle_response(response):
                 try:
