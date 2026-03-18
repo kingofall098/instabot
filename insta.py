@@ -22,21 +22,34 @@ def send_images(bot, chat_id, images):
         "Referer": "https://www.google.com/"
     }
 
-    for img_url in images[:3]:
+    for i, img_url in enumerate(images[:5]):  # send first 5 in order
         try:
             res = requests.get(img_url, headers=headers, timeout=10)
 
             if res.status_code == 200 and len(res.content) > 1000:
-                try:
-                    bot.send_photo(chat_id, res.content)
-                except Exception as e:
-                    logging.warning(f"Telegram rejected image: {e}")
-                    bot.send_document(chat_id, res.content)
+                bot.send_photo(chat_id, res.content)
+                logging.info(f"Sent image {i+1}")
             else:
-                logging.warning(f"Bad image skipped: {img_url}")
+                logging.warning(f"Skipped bad image: {img_url}")
 
         except Exception as e:
             logging.warning(f"Send error: {e}")
+def send_videos(bot, chat_id, videos):
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    for vid_url in videos[:2]:
+        try:
+            res = requests.get(vid_url, headers=headers, timeout=15)
+
+            if res.status_code == 200:
+                bot.send_video(chat_id, res.content)
+            else:
+                logging.warning(f"Video failed: {vid_url}")
+
+        except Exception as e:
+            logging.warning(f"Video error: {e}")
 # -------------------------
 # MAIN ENGINE
 # -------------------------
@@ -151,16 +164,27 @@ def dynamic_scrape(url):
         return {"title": "Error", "images": [], "videos": []}
 
     # ALWAYS runs
-    media_urls = list(set(media_urls))
+    # keep order + remove duplicates
+    seen = set()
+    ordered_media = []
+
+    for u in media_urls:
+        if u not in seen:
+            seen.add(u)
+            ordered_media.append(u)
+
+    media_urls = ordered_media
 
     if "twitter.com" in url or "x.com" in url:
         images = [u for u in media_urls if "twimg.com/media" in u and "name=large" in u]
+        videos = [u for u in media_urls if ".mp4" in u]
 
     elif "instagram.com" in url:
         images = [
             u for u in media_urls
             if "cdninstagram.com" in u and "s150x150" not in u
         ]
+        videos = [u for u in media_urls if ".mp4" in u]
 
     else:
         images = [
@@ -170,13 +194,8 @@ def dynamic_scrape(url):
                 and not any(bad in u.lower() for bad in ["logo", "icon", "avatar", "thumb"])
             )
         ]
-
-    videos = [
-        u for u in media_urls
-        if any(ext in u.lower() for ext in [".mp4", ".webm"])
-    ]
-
-    logging.info(f"Final Images: {len(images)}")
+        videos = [u for u in media_urls if any(ext in u.lower() for ext in [".mp4", ".webm"])]
+        logging.info(f"Final Images: {len(images)}")
     logging.info(f"Final Videos: {len(videos)}")
 
     return {
@@ -218,6 +237,13 @@ def handle(msg):
         bot.send_message(msg.chat.id, response)
 
         logging.info(f"Images: {len(data['images'])}, Videos: {len(data['videos'])}")
+
+        # 🔥 SEND MEDIA HERE
+        if data['images']:
+            send_images(bot, msg.chat.id, data['images'])
+
+        if data['videos']:
+            send_videos(bot, msg.chat.id, data['videos'])
 
         # 🔥 SEND IMAGES
         send_images(bot, msg.chat.id, data['images'])
