@@ -2,6 +2,7 @@
 import telebot
 import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 from urllib.parse import urljoin
 from playwright_stealth import stealth
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
@@ -202,7 +203,7 @@ def dynamic_scrape(url):
         
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
 
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
