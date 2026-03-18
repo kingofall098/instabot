@@ -126,7 +126,7 @@ def is_valid_media(url):
     if "twimg.com/media" in url and "name=small" not in url:
         return True
     # reject common junk
-    bad_keywords = ["logo", "icon", "avatar", "thumb", "sprite", "ads", "banner"]
+    bad_keywords = ["logo", "icon", "avatar", "thumb", "sprite", "ads", "banner", "popup"]
 
     if any(bad in url for bad in bad_keywords):
         return False
@@ -154,17 +154,18 @@ def send_images(bot, chat_id, images, page_url):
             break
 
         try:
-            res = requests.get(img_url, headers=headers, timeout=10)
-
-            if res.status_code == 200 and len(res.content) > 5000:
-                bot.send_photo(chat_id, res.content)
-                logging.info(f"Sent image {sent+1}")
-                sent += 1
-            else:
-                logging.warning(f"Skipped bad image: {img_url}")
-
+            bot.send_photo(chat_id, img_url)   # 🔥 SEND URL DIRECTLY
+            logging.info(f"Sent image {sent+1}")
+            sent += 1
         except Exception as e:
-            logging.warning(f"Send error: {e}")
+            logging.warning(f"URL failed, trying download: {e}")
+
+            try:
+                res = requests.get(img_url, headers=headers, timeout=10)
+                bot.send_photo(chat_id, res.content)
+                sent += 1
+            except Exception as e2:
+                logging.warning(f"Final send failed: {e2}")
 def send_videos(bot, chat_id, videos, page_url):
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -496,7 +497,7 @@ def handle(msg):
             return
 
         logging.info("Scraping completed successfully")
-
+        logging.info(f"Sending {len(data['images'])} images")
         response = f"📄 Title: {data['title']}\n"
         response += f"🖼 Images: {len(data['images'])}\n"
         response += f"🎥 Videos: {len(data['videos'])}\n"
