@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 import re
@@ -153,6 +154,9 @@ def is_valid_media(url):
     if "hr_" in lower:
         return True
 
+    if ".m3u8" in lower:
+        return True
+
     return has_any_ext(lower, MEDIA_EXTS)
 
 
@@ -166,7 +170,7 @@ def dedupe_keep_order(items):
     return output
 
 
-def send_images(bot_client, chat_id, images, page_url, limit=10):
+def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=80):
     parsed = urlparse(page_url)
     domain = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
 
@@ -185,14 +189,17 @@ def send_images(bot_client, chat_id, images, page_url, limit=10):
         try:
             head = requests.head(img_url, timeout=7, allow_redirects=True)
             size = int(head.headers.get("content-length", 0))
-            if size and size < 20000:
-                logging.info("Skipped small image (<20KB): %s", img_url)
+            if size and size < (min_size_kb * 1024):
+                logging.info("Skipped small image (<%sKB): %s", min_size_kb, img_url)
                 continue
         except Exception:
             pass
 
         try:
-            bot_client.send_photo(chat_id, img_url)
+            if send_as_document:
+                bot_client.send_document(chat_id, img_url)
+            else:
+                bot_client.send_photo(chat_id, img_url)
             sent += 1
             logging.info("Sent image via URL (%s/%s)", sent, max_to_send)
             continue
@@ -202,7 +209,12 @@ def send_images(bot_client, chat_id, images, page_url, limit=10):
         try:
             res = requests.get(img_url, headers=headers, timeout=15)
             if res.status_code == 200:
-                bot_client.send_photo(chat_id, res.content)
+                if send_as_document:
+                    file_obj = io.BytesIO(res.content)
+                    file_obj.name = "image.jpg"
+                    bot_client.send_document(chat_id, file_obj)
+                else:
+                    bot_client.send_photo(chat_id, res.content)
                 sent += 1
                 logging.info("Sent image via download (%s/%s)", sent, max_to_send)
         except Exception as exc:
@@ -217,13 +229,41 @@ def send_videos(bot_client, chat_id, videos, page_url, limit=2):
 
     for vid_url in videos[:limit]:
         try:
+            if ".m3u8" in vid_url.lower():
+                ydl_opts = {
+                    "quiet": True,
+                    "format": "best[ext=mp4]/best",
+                    "noplaylist": True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(vid_url, download=False)
+                    direct = info.get("url")
+                if direct:
+                    bot_client.send_video(chat_id, direct)
+                    continue
+
             res = requests.get(vid_url, headers=headers, timeout=15, stream=True)
             if res.status_code == 200:
                 bot_client.send_video(chat_id, vid_url)
-            else:
-                logging.warning("Video HEAD/GET check failed: %s", vid_url)
+                continue
+
+            logging.warning("Video GET check failed: %s", vid_url)
         except Exception as exc:
-            logging.warning("Video send error: %s", exc)
+            logging.warning("Primary video send error: %s", exc)
+
+        try:
+            ydl_opts = {
+                "quiet": True,
+                "format": "best[ext=mp4]/best",
+                "noplaylist": True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(vid_url, download=False)
+                direct = info.get("url")
+            if direct:
+                bot_client.send_video(chat_id, direct)
+        except Exception as exc:
+            logging.warning("Video fallback extraction failed: %s", exc)
 
 
 def detect_site(url):
@@ -318,11 +358,35 @@ def collect_dom_media(page):
     )
     media_urls.extend([u for u in dom_images if u and is_valid_media(u)])
 
+    srcset_urls = page.eval_on_selector_all(
+        "img",
+        """els => {
+            const out = [];
+            for (const e of els) {
+                const sets = [e.getAttribute('srcset'), e.getAttribute('data-srcset')].filter(Boolean);
+                for (const set of sets) {
+                    for (const part of set.split(',')) {
+                        const url = part.trim().split(' ')[0];
+                        if (url) out.push(url);
+                    }
+                }
+            }
+            return out;
+        }""",
+    )
+    media_urls.extend([u for u in srcset_urls if u and is_valid_media(u)])
+
     dom_videos = page.eval_on_selector_all(
         "video, source",
         "els => els.map(e => e.src || e.getAttribute('src'))",
     )
     media_urls.extend([u for u in dom_videos if u and is_valid_media(u)])
+
+    meta_media = page.eval_on_selector_all(
+        "meta[property='og:image'], meta[property='og:video'], meta[property='og:video:url'], meta[name='twitter:image'], meta[name='twitter:player:stream']",
+        "els => els.map(e => e.getAttribute('content'))",
+    )
+    media_urls.extend([u for u in meta_media if u and is_valid_media(u)])
 
     return media_urls
 
@@ -336,7 +400,10 @@ def _dynamic_scrape_on_page(page, url):
         def handle_response(response):
             try:
                 candidate = response.url
-                if has_any_ext(candidate, MEDIA_EXTS) and is_valid_media(candidate):
+                content_type = (response.headers.get("content-type") or "").lower()
+                is_video_type = content_type.startswith("video/") or "application/vnd.apple.mpegurl" in content_type
+                is_image_type = content_type.startswith("image/")
+                if (has_any_ext(candidate, MEDIA_EXTS) or is_video_type or is_image_type) and is_valid_media(candidate):
                     media_urls.append(candidate)
             except Exception as exc:
                 logging.warning("Response hook error: %s", exc)
@@ -378,7 +445,7 @@ def _dynamic_scrape_on_page(page, url):
     media_urls = sorted(media_urls, key=score_url, reverse=True)
 
     images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS)]
-    videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS)]
+    videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS) or ".m3u8" in u.lower()]
 
     def extract_page_number(candidate):
         m = re.search(r"hr_(\d+)", candidate)
@@ -570,3 +637,5 @@ def handle(msg):
 
 if __name__ == "__main__":
     bot.infinity_polling(skip_pending=True)
+
+
