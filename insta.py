@@ -198,6 +198,27 @@ def dedupe_keep_order(items):
     return output
 
 
+def expand_image_candidates(url):
+    if not url:
+        return []
+
+    candidates = [url]
+
+    # Common size tokens in image CDNs: /236x/... or /960x540/... etc.
+    sized_path = re.search(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", url, flags=re.IGNORECASE)
+    if sized_path:
+        candidates.append(re.sub(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", "/originals/", url, flags=re.IGNORECASE))
+        candidates.append(re.sub(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", "/1200x/", url, flags=re.IGNORECASE))
+
+    # Remove width/height quality params that often force thumbnails.
+    stripped = re.sub(r"([?&])(w|h|width|height|quality|q|resize)=[^&]+", "", url, flags=re.IGNORECASE)
+    stripped = re.sub(r"\?&", "?", stripped).rstrip("?&")
+    if stripped and stripped != url:
+        candidates.append(stripped)
+
+    return dedupe_keep_order(candidates)
+
+
 def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=0):
     parsed = urlparse(page_url)
     domain = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
@@ -408,6 +429,22 @@ def collect_dom_media(page):
     )
     media_urls.extend(normalize(dom_images, expect_media=True))
 
+    highres_attr_images = page.eval_on_selector_all(
+        "img",
+        """els => {
+            const attrs = ['data-full','data-original','data-zoom-image','data-large-file','data-image','data-url'];
+            const out = [];
+            for (const e of els) {
+                for (const a of attrs) {
+                    const v = e.getAttribute(a);
+                    if (v) out.push(v);
+                }
+            }
+            return out;
+        }""",
+    )
+    media_urls.extend(normalize(highres_attr_images, expect_media=True))
+
     srcset_urls = page.eval_on_selector_all(
         "img",
         """els => {
@@ -425,6 +462,12 @@ def collect_dom_media(page):
         }""",
     )
     media_urls.extend(normalize(srcset_urls, expect_media=True))
+
+    anchor_urls = page.eval_on_selector_all(
+        "a[href]",
+        "els => els.map(e => e.href || e.getAttribute('href'))",
+    )
+    media_urls.extend(normalize(anchor_urls, expect_media=True))
 
     dom_videos = page.eval_on_selector_all(
         "video, source",
@@ -496,6 +539,16 @@ def _dynamic_scrape_on_page(page, url):
 
     media_urls = dedupe_keep_order(media_urls)
     media_urls = [u for u in media_urls if is_valid_media(u)]
+
+    expanded = []
+    for u in media_urls:
+        if has_any_ext(u, IMAGE_EXTS):
+            expanded.extend(expand_image_candidates(u))
+        else:
+            expanded.append(u)
+    media_urls = dedupe_keep_order(expanded)
+    media_urls = [u for u in media_urls if is_valid_media(u)]
+
     media_urls = sorted(media_urls, key=score_url, reverse=True)
 
     images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS)]
