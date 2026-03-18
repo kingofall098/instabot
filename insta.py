@@ -1,9 +1,10 @@
+# code with stealth
 import telebot
 import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from urllib.parse import urljoin
-
+from playwright_stealth import stealth_sync
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN)
 import logging
@@ -199,9 +200,13 @@ def dynamic_scrape(url):
     media_urls = []
 
     try:
+        
+
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=True)  # ❗ important
             page = browser.new_page()
+
+            stealth_sync(page)  # 🔥 bypass detection
 
             def handle_response(response):
                 try:
