@@ -87,7 +87,7 @@ def scrape_chapter(base_url, bot,chat_id):
 
     for i in range(1, 50):
         # 🔥 SEND PROGRESS
-        if i % 3 == 1:
+        if i == 1 or i % 5 == 0:
             bot.send_message(chat_id, f"📄 Scraping page {i}...")
 
         page_url = f"{base_url}{i}/"
@@ -95,8 +95,12 @@ def scrape_chapter(base_url, bot,chat_id):
 
         data = dynamic_scrape(page_url)
 
-        if not data['images']:
-            logging.info("No more images, stopping...")
+        if not data or not data.get('images'):
+            logging.info("Stopping: no data")
+            break
+
+        if len(data['images']) < 5:
+            logging.info("Stopping: likely last page")
             break
 
         for img in data['images']:
@@ -395,6 +399,7 @@ def dynamic_scrape(url):
             #     if img:
             #         media_urls.append(img)
             # title = page.title()
+            title = page.title()
             browser.close()
         logging.info(f"Collected raw URLs: {len(media_urls)}")
         logging.info(f"Sample: {media_urls[:5]}")
@@ -421,7 +426,11 @@ def dynamic_scrape(url):
     videos = [u for u in media_urls if is_valid_media(u) and any(ext in u for ext in [".mp4", ".webm"])]
 
     # rank
-    images = sorted(images, key=score_url, reverse=True)
+    def extract_page_number(url):
+        match = re.search(r'hr_(\d+)', url)
+        return int(match.group(1)) if match else 0
+
+    images = sorted(images, key=extract_page_number)
     videos = sorted(videos, key=score_url, reverse=True)
     logging.info(f"Final Images: {len(images)}")
     logging.info(f"Final Videos: {len(videos)}")
