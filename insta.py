@@ -2,7 +2,7 @@
 import telebot
 import requests
 from bs4 import BeautifulSoup
-# from urllib.parse import urljoin
+from urllib.parse import urljoin
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN)
 import logging
