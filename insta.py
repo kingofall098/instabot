@@ -20,7 +20,7 @@ logging.basicConfig(
     ],
 )
 
-TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("Set TELEGRAM_BOT_TOKEN environment variable")
 
@@ -29,6 +29,7 @@ bot = telebot.TeleBot(TOKEN)
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 VIDEO_EXTS = (".mp4", ".webm")
 MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
+DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
 
 def handle_popups(page):
@@ -144,14 +145,8 @@ def is_http_url(url):
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def is_valid_media(url):
-    if not url:
-        return False
-
-    if not is_http_url(url):
-        return False
-
-    lower = url.lower()
+def is_blocked_or_junk_url(url):
+    lower = (url or "").lower()
     bad_keywords = [
         "logo",
         "icon",
@@ -164,11 +159,22 @@ def is_valid_media(url):
         "favicon",
         "emoji",
     ]
-
     if any(k in lower for k in bad_keywords):
+        return True
+    if "doubleclick" in lower or "googlesyndication" in lower:
+        return True
+    return False
+
+
+def is_valid_media(url):
+    if not url:
         return False
 
-    if "doubleclick" in lower or "googlesyndication" in lower:
+    if not is_http_url(url):
+        return False
+
+    lower = url.lower()
+    if is_blocked_or_junk_url(lower):
         return False
 
     if "hr_" in lower:
@@ -375,6 +381,20 @@ def run_page_strategy(page, strategy):
 def collect_dom_media(page):
     media_urls = []
 
+    def normalize(urls, expect_media=False):
+        out = []
+        for raw in urls:
+            if not raw:
+                continue
+            normalized = urljoin(page.url, raw)
+            if not is_http_url(normalized):
+                continue
+            if is_blocked_or_junk_url(normalized):
+                continue
+            if expect_media or is_valid_media(normalized):
+                out.append(normalized)
+        return out
+
     dom_images = page.eval_on_selector_all(
         "img",
         """els => els.map(e =>
@@ -384,7 +404,7 @@ def collect_dom_media(page):
             e.getAttribute('data-lazy')
         )""",
     )
-    media_urls.extend([u for u in dom_images if u and is_valid_media(u)])
+    media_urls.extend(normalize(dom_images, expect_media=True))
 
     srcset_urls = page.eval_on_selector_all(
         "img",
@@ -402,19 +422,19 @@ def collect_dom_media(page):
             return out;
         }""",
     )
-    media_urls.extend([u for u in srcset_urls if u and is_valid_media(u)])
+    media_urls.extend(normalize(srcset_urls, expect_media=True))
 
     dom_videos = page.eval_on_selector_all(
         "video, source",
         "els => els.map(e => e.src || e.getAttribute('src'))",
     )
-    media_urls.extend([u for u in dom_videos if u and is_valid_media(u)])
+    media_urls.extend(normalize(dom_videos, expect_media=True))
 
     meta_media = page.eval_on_selector_all(
         "meta[property='og:image'], meta[property='og:video'], meta[property='og:video:url'], meta[name='twitter:image'], meta[name='twitter:player:stream']",
         "els => els.map(e => e.getAttribute('content'))",
     )
-    media_urls.extend([u for u in meta_media if u and is_valid_media(u)])
+    media_urls.extend(normalize(meta_media, expect_media=True))
 
     return media_urls
 
@@ -431,7 +451,11 @@ def _dynamic_scrape_on_page(page, url):
                 content_type = (response.headers.get("content-type") or "").lower()
                 is_video_type = content_type.startswith("video/") or "application/vnd.apple.mpegurl" in content_type
                 is_image_type = content_type.startswith("image/")
-                if (has_any_ext(candidate, MEDIA_EXTS) or is_video_type or is_image_type) and is_valid_media(candidate):
+                if is_blocked_or_junk_url(candidate):
+                    return
+                if (is_video_type or is_image_type) and is_http_url(candidate):
+                    media_urls.append(candidate)
+                elif has_any_ext(candidate, MEDIA_EXTS) and is_valid_media(candidate):
                     media_urls.append(candidate)
             except Exception as exc:
                 logging.warning("Response hook error: %s", exc)
@@ -497,8 +521,15 @@ def dynamic_scrape(url):
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            context = browser.new_context(
+                user_agent=DEFAULT_UA,
+                locale="en-US",
+                viewport={"width": 1366, "height": 768},
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            )
+            page = context.new_page()
             result = _dynamic_scrape_on_page(page, url)
+            context.close()
             browser.close()
             return result
     except Exception as exc:
@@ -551,7 +582,13 @@ def scrape_chapter(base_url, bot_client, chat_id, max_pages=50):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        context = browser.new_context(
+            user_agent=DEFAULT_UA,
+            locale="en-US",
+            viewport={"width": 1366, "height": 768},
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
+        page = context.new_page()
 
         for i in range(1, max_pages + 1):
             if i == 1 or i % 5 == 0:
@@ -579,6 +616,7 @@ def scrape_chapter(base_url, bot_client, chat_id, max_pages=50):
                 logging.info("Stopping chapter scrape: no new images")
                 break
 
+        context.close()
         browser.close()
 
     return all_images
