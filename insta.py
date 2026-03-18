@@ -16,6 +16,23 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+def send_images(bot, chat_id, images):
+    for img_url in images[:3]:
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://www.instagram.com/"
+            }
+
+            res = requests.get(img_url, headers=headers, timeout=10)
+
+            if res.status_code == 200:
+                bot.send_photo(chat_id, res.content)
+            else:
+                logging.warning(f"Failed to download: {img_url}")
+
+        except Exception as e:
+            logging.warning(f"Send error: {e}")
 # -------------------------
 # MAIN ENGINE
 # -------------------------
@@ -186,7 +203,12 @@ def handle(msg):
         response += f"🎥 Videos: {len(data['videos'])}\n"
 
         bot.send_message(msg.chat.id, response)
+
         logging.info(f"Images: {len(data['images'])}, Videos: {len(data['videos'])}")
+
+        # 🔥 SEND IMAGES
+        send_images(bot, msg.chat.id, data['images'])
+        
     except Exception as e:
         logging.error(f"Error occurred: {str(e)}", exc_info=True)
         bot.send_message(msg.chat.id, "❌ Error occurred while scraping")
