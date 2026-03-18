@@ -41,30 +41,6 @@ def smart_scrape(url):
     except Exception as e:
         logging.warning(f"Static error → switching to dynamic: {e}")
         return dynamic_scrape(url)
-def static_scrape(url):
-    logging.info("Static scraping started")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    res = requests.get(url, headers=headers, timeout=15)
-    logging.info(f"Status Code: {res.status_code}")
-
-    soup = BeautifulSoup(res.text, "html.parser")
-
-    title = soup.title.string.strip() if soup.title else "No title"
-
-    images = [img.get("src") for img in soup.find_all("img") if img.get("src")]
-    videos = [v.get("src") for v in soup.find_all("video") if v.get("src")]
-
-    logging.info(f"Found {len(images)} images and {len(videos)} videos")
-
-    return {
-        "title": title,
-        "images": images,
-        "videos": videos
-    }
 # -------------------------
 # DETECTION
 # -------------------------
@@ -119,11 +95,25 @@ def dynamic_scrape(url):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
+def dynamic_scrape(url):
+    logging.info("Deep scraping started (network mode)")
+
+    media_urls = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
         def handle_response(response):
             try:
                 content_type = response.headers.get("content-type", "").lower()
+                url_res = response.url.lower()
 
-                if "image" in content_type or "video" in content_type:
+                if (
+                    "image" in content_type
+                    or "video" in content_type
+                    or any(ext in url_res for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm"])
+                ):
                     media_urls.append(response.url)
 
             except Exception as e:
@@ -133,6 +123,8 @@ def dynamic_scrape(url):
 
         logging.info("Opening page...")
         page.goto(url, timeout=60000)
+
+        page.wait_for_timeout(3000)  # ✅ IMPORTANT
 
         for i in range(5):
             logging.info(f"Scrolling {i+1}")
@@ -145,21 +137,14 @@ def dynamic_scrape(url):
 
     media_urls = list(set(media_urls))
 
-    valid_ext = [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]
-
-    media_urls = [
-        u for u in media_urls
-        if any(ext in u.lower() for ext in valid_ext)
-    ]
-
     logging.info(f"Captured {len(media_urls)} media URLs")
     logging.info(f"Sample: {media_urls[:5]}")
 
     return {
         "title": title,
-        "images": [u for u in media_urls if any(ext in u for ext in [".jpg", ".png", ".webp"])],
-        "videos": [u for u in media_urls if any(ext in u for ext in [".mp4", ".webm"])]
-    }        
+        "images": [u for u in media_urls if any(ext in u.lower() for ext in [".jpg", ".png", ".webp", ".gif"])],
+        "videos": [u for u in media_urls if any(ext in u.lower() for ext in [".mp4", ".webm"])]
+    }     
 # -------------------------
 # BOT
 # -------------------------
