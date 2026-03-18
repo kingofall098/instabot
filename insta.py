@@ -81,12 +81,13 @@ def get_base_url(url):
     if match:
         return match.group(1)
     return None
-def scrape_chapter(base_url, bot,chat_id):
+def scrape_chapter(base_url, bot, chat_id):
     all_images = []
     seen = set()
 
     for i in range(1, 50):
-        # 🔥 SEND PROGRESS
+
+        # progress message
         if i == 1 or i % 5 == 0:
             bot.send_message(chat_id, f"📄 Scraping page {i}...")
 
@@ -95,18 +96,27 @@ def scrape_chapter(base_url, bot,chat_id):
 
         data = dynamic_scrape(page_url)
 
+        # 🔥 stop ONLY if completely empty or failed
         if not data or not data.get('images'):
             logging.info("Stopping: no data")
             break
 
-        if len(data['images']) < 5:
-            logging.info("Stopping: likely last page")
-            break
+        logging.info(f"Page {i} images: {len(data['images'])}")
+
+        added = 0
 
         for img in data['images']:
             if img not in seen:
                 seen.add(img)
                 all_images.append(img)
+                added += 1
+
+        logging.info(f"Added {added} new images (Total: {len(all_images)})")
+
+        # 🔥 safety stop (avoid infinite loop)
+        if added == 0:
+            logging.info("Stopping: no new images")
+            break
 
     return all_images
 def score_url(url):
