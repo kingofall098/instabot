@@ -6,7 +6,84 @@ from urllib.parse import urljoin
 
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN)
+import logging
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
+    ]
+)
+def smart_scrape(url):
+    logging.info(f"Starting scrape for: {url}")
+
+    if is_dynamic(url):
+        logging.info("Using dynamic scraper")
+        return dynamic_scrape(url)
+    else:
+        logging.info("Using static scraper")
+        return static_scrape(url)
+def static_scrape(url):
+    logging.info("Static scraping started")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    res = requests.get(url, headers=headers, timeout=15)
+    logging.info(f"Status Code: {res.status_code}")
+
+    soup = BeautifulSoup(res.text, "html.parser")
+
+    title = soup.title.string.strip() if soup.title else "No title"
+
+    images = [img.get("src") for img in soup.find_all("img") if img.get("src")]
+    videos = [v.get("src") for v in soup.find_all("video") if v.get("src")]
+
+    logging.info(f"Found {len(images)} images and {len(videos)} videos")
+
+    return {
+        "title": title,
+        "images": images,
+        "videos": videos
+    }
+def dynamic_scrape(url):
+    logging.info("Dynamic scraping started")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        logging.info("Opening page...")
+        page.goto(url, timeout=60000)
+
+        logging.info("Scrolling page...")
+        for _ in range(3):
+            page.mouse.wheel(0, 3000)
+            page.wait_for_timeout(1500)
+
+        title = page.title()
+        logging.info(f"Page title: {title}")
+
+        images = page.eval_on_selector_all(
+            "img", "els => els.map(e => e.src)"
+        )
+
+        videos = page.eval_on_selector_all(
+            "video", "els => els.map(e => e.src)"
+        )
+
+        logging.info(f"Collected {len(images)} images and {len(videos)} videos")
+
+        browser.close()
+
+        return {
+            "title": title,
+            "images": images,
+            "videos": videos
+        }
 # -------------------------
 # DETECTION
 # -------------------------
@@ -98,6 +175,7 @@ def start(msg):
 @bot.message_handler(func=lambda m: True)
 def handle(msg):
     url = msg.text.strip()
+    logging.info(f"Received URL from user: {url}")
 
     if not url.startswith("http"):
         bot.reply_to(msg, "❌ Send a valid URL")
@@ -108,20 +186,16 @@ def handle(msg):
     try:
         data = smart_scrape(url)
 
+        logging.info("Scraping completed successfully")
+
         response = f"📄 Title: {data['title']}\n"
         response += f"🖼 Images: {len(data['images'])}\n"
         response += f"🎥 Videos: {len(data['videos'])}\n"
 
         bot.send_message(msg.chat.id, response)
 
-        # Send images safely
-        for img in data['images'][:5]:
-            try:
-                bot.send_photo(msg.chat.id, img)
-            except:
-                continue
-
     except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Error: {str(e)}")
+        logging.error(f"Error occurred: {str(e)}", exc_info=True)
+        bot.send_message(msg.chat.id, "❌ Error occurred while scraping")
 
 bot.infinity_polling()
