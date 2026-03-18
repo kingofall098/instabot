@@ -207,12 +207,25 @@ def dynamic_scrape(url):
                 try:
                     url = response.url.lower()
 
-                    # capture anything that LOOKS like media
+                    # capture media URLs
                     if any(ext in url for ext in [
                         ".jpg", ".jpeg", ".png", ".webp", ".gif",
-                        ".mp4", ".webm", ".m3u8"
+                        ".mp4", ".webm"
                     ]):
                         media_urls.append(response.url)
+
+                    # 🔥 capture JSON responses
+                    if "application/json" in response.headers.get("content-type", ""):
+                        try:
+                            data = response.text()
+
+                            found = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', data)
+
+                            for img in found:
+                                media_urls.append(img)
+
+                        except:
+                            pass
 
                 except Exception as e:
                     logging.warning(f"Response error: {e}")
@@ -221,7 +234,7 @@ def dynamic_scrape(url):
 
             page.goto(url, timeout=60000)
             page.wait_for_timeout(5000)
-
+        
             for i in range(6):
                 page.mouse.wheel(0, 6000)
                 page.wait_for_timeout(2000)
@@ -240,11 +253,23 @@ def dynamic_scrape(url):
                     "img",
                     "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
                 )
+            # 🔥 extract page HTML content
+            html = page.content()
 
+            import re
+
+            # find image URLs inside scripts
+            found = re.findall(r'https://[^"]+\.jpg', html)
+
+            for img in found:
+                media_urls.append(img)
+            # 🔥 extract JSON-like image data
+            json_images = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', html)
+
+            for img in json_images:
+                media_urls.append(img)
+            logging.info(f"HTML extracted images: {len(found)}")
             # ✅ process images OUTSIDE try/except
-            for img in dom_images:
-                if img:
-                    media_urls.append(img)
 
             for img in dom_images:
                 if img:
