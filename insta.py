@@ -18,6 +18,42 @@ logging.basicConfig(
     ]
 )
 import re
+def handle_popups(page):
+    try:
+        # common buttons
+        selectors = [
+            "button:has-text('Accept')",
+            "button:has-text('I Agree')",
+            "button:has-text('Enter')",
+            "button:has-text('Yes')",
+            "button:has-text('Continue')",
+            "button:has-text('I am 18')",
+            "text=I am 18",
+            "text=Enter"
+        ]
+
+        for sel in selectors:
+            try:
+                btn = page.query_selector(sel)
+                if btn:
+                    btn.click()
+                    logging.info(f"Popup handled with: {sel}")
+                    page.wait_for_timeout(2000)
+                    break
+            except:
+                pass
+
+        # remove overlay manually (backup)
+        page.evaluate("""
+            document.querySelectorAll('div,section').forEach(el => {
+                if (el.innerText && el.innerText.toLowerCase().includes('18')) {
+                    el.remove();
+                }
+            });
+        """)
+
+    except Exception as e:
+        logging.warning(f"Popup handling error: {e}")
 #===================================================
 #DECTECT THE TYPE OF PAGE IN A WEBSITE
 #====================================================
@@ -132,27 +168,33 @@ def score_url(url):
 
     return score
 def is_valid_media(url):
+    if not url:
+        return False
+
     url = url.lower()
-    if "hencover" in url or "hr_" in url:
+
+    # ❌ BLOCK obvious junk
+    bad_keywords = [
+        "logo", "icon", "avatar", "thumb", "sprite",
+        "ads", "banner", "popup", "favicon", "emoji"
+    ]
+
+    if any(k in url for k in bad_keywords):
+        return False
+
+    # ❌ BLOCK tracking / cdn junk
+    if "doubleclick" in url or "googlesyndication" in url:
+        return False
+
+    # ✅ ALLOW strong image patterns (manga pages)
+    if "hr_" in url:
         return True
-    # must be media type
-    if not any(ext in url for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]):
-        return False
-    if "twimg.com/media" in url and "name=small" not in url:
+
+    # fallback: allow only real image extensions
+    if any(ext in url for ext in [".jpg", ".jpeg", ".png", ".webp"]):
         return True
-    # reject common junk
-    bad_keywords = ["logo", "icon", "avatar", "thumb", "sprite", "ads", "banner", "popup"]
 
-    if any(bad in url for bad in bad_keywords):
-        return False
-
-    # reject very small images
-    if "s150x150" in url or "small" in url:
-        return False
-
-    return True
-
-from urllib.parse import urlparse
+    return False
 
 def send_images(bot, chat_id, images, page_url):
     domain = urlparse(page_url).scheme + "://" + urlparse(page_url).netloc
@@ -167,7 +209,19 @@ def send_images(bot, chat_id, images, page_url):
     for img_url in images:
         if sent >= 10:
             break
+        try:
+            res = requests.head(img_url, timeout=5)
 
+            size = int(res.headers.get("content-length", 0))
+
+            # ❌ skip small images (<20KB)
+            if size < 20000:
+                logging.warning(f"Skipped small image: {img_url}")
+                continue
+
+        except:
+            pass
+    
         try:
             bot.send_photo(chat_id, img_url)   # 🔥 SEND URL DIRECTLY
             logging.info(f"Sent image {sent+1}")
@@ -313,6 +367,11 @@ def dynamic_scrape(url):
 
             try:
                 page.goto(url, timeout=30000)
+                page.wait_for_timeout(3000)
+
+                # 🔥 HANDLE POPUPS HERE
+                handle_popups(page)
+                page.wait_for_timeout(3000)
             except Exception:
                 logging.warning(f"Timeout loading: {url}")
                 return {"title": "Timeout", "images": [], "videos": []}
