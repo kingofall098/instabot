@@ -46,10 +46,14 @@ def is_valid_media(url):
         return False
 
     return True
-def send_images(bot, chat_id, images):
+from urllib.parse import urlparse
+
+def send_images(bot, chat_id, images, page_url):
+    domain = urlparse(page_url).scheme + "://" + urlparse(page_url).netloc
+
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Referer": "https://www.google.com/"
+        "Referer": domain   # 🔥 dynamic referer
     }
 
     sent = 0
@@ -264,7 +268,7 @@ def handle(msg):
 
         # 🔥 SEND MEDIA HERE
         if data['images']:
-            send_images(bot, msg.chat.id, data['images'])
+            send_images(bot, msg.chat.id, data['images'], url)
 
         if data['videos']:
             send_videos(bot, msg.chat.id, data['videos'])
