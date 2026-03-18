@@ -17,19 +17,23 @@ logging.basicConfig(
     ]
 )
 def send_images(bot, chat_id, images):
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.google.com/"
+    }
+
     for img_url in images[:3]:
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://www.instagram.com/"
-            }
-
             res = requests.get(img_url, headers=headers, timeout=10)
 
-            if res.status_code == 200:
-                bot.send_photo(chat_id, res.content)
+            if res.status_code == 200 and len(res.content) > 1000:
+                try:
+                    bot.send_photo(chat_id, res.content)
+                except Exception as e:
+                    logging.warning(f"Telegram rejected image: {e}")
+                    bot.send_document(chat_id, res.content)
             else:
-                logging.warning(f"Failed to download: {img_url}")
+                logging.warning(f"Bad image skipped: {img_url}")
 
         except Exception as e:
             logging.warning(f"Send error: {e}")
@@ -152,9 +156,12 @@ def dynamic_scrape(url):
     images = [
         u for u in media_urls
         if (
-            any(ext in u.lower() for ext in [".jpg", ".png", ".webp", ".gif"])
+            any(ext in u.lower() for ext in [".jpg", ".png", ".webp"])
             and "s150x150" not in u
             and "profile_pic" not in u
+            and "icon" not in u
+            and "logo" not in u
+            and "preview" not in u
         )
     ]
 
