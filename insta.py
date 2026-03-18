@@ -23,10 +23,14 @@ def get_base_url(url):
     if match:
         return match.group(1)
     return None
-def scrape_chapter(base_url):
+def scrape_chapter(base_url, bot,chat_id):
     all_images = []
+    seen = set()
 
-    for i in range(1, 50):  # max pages
+    for i in range(1, 50):
+        # 🔥 SEND PROGRESS
+        bot.send_message(chat_id, f"📄 Scraping page {i}...")
+
         page_url = f"{base_url}{i}/"
         logging.info(f"Scraping page {i}: {page_url}")
 
@@ -36,7 +40,10 @@ def scrape_chapter(base_url):
             logging.info("No more images, stopping...")
             break
 
-        all_images.extend(data['images'])
+        for img in data['images']:
+            if img not in seen:
+                seen.add(img)
+                all_images.append(img)
 
     return all_images
 def score_url(url):
@@ -97,9 +104,10 @@ def send_images(bot, chat_id, images, page_url):
 
         except Exception as e:
             logging.warning(f"Send error: {e}")
-def send_videos(bot, chat_id, videos):
+def send_videos(bot, chat_id, videos, page_url):
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0",
+        "Referer": page_url
     }
 
     for vid_url in videos[:2]:
@@ -278,7 +286,7 @@ def handle(msg):
         if base_url:
             logging.info("Chapter detected")
 
-            images = scrape_chapter(base_url)
+            images = scrape_chapter(base_url, bot, msg.chat.id)
 
             data = {
                 "title": "Chapter Download",
@@ -299,6 +307,9 @@ def handle(msg):
         response += f"🎥 Videos: {len(data['videos'])}\n"
 
         bot.send_message(msg.chat.id, response)
+        # 🔥 LIMIT IMAGES
+        MAX_IMAGES = 30
+        data['images'] = data['images'][:MAX_IMAGES]
 
         logging.info(f"Images: {len(data['images'])}, Videos: {len(data['videos'])}")
 
