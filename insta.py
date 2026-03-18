@@ -91,61 +91,69 @@ def dynamic_scrape(url):
     logging.info("Deep scraping started (network mode)")
 
     media_urls = []
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
 
-        def handle_response(response):
-            try:
-                content_type = response.headers.get("content-type", "").lower()
-                url_res = response.url.lower()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
 
-                if (
-                    "image" in content_type
-                    or "video" in content_type
-                    or any(ext in url_res for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm"])
-                ):
-                    media_urls.append(response.url)
+            def handle_response(response):
+                try:
+                    content_type = response.headers.get("content-type", "").lower()
+                    url_res = response.url.lower()
 
-            except Exception as e:
-                logging.warning(f"Response error: {e}")
+                    if (
+                        "image" in content_type
+                        or "video" in content_type
+                        or any(ext in url_res for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm"])
+                    ):
+                        media_urls.append(response.url)
 
-        page.on("response", handle_response)
+                except Exception as e:
+                    logging.warning(f"Response error: {e}")
 
-        logging.info("Opening page...")
-        page.goto(url, timeout=60000)
+            page.on("response", handle_response)
 
-        page.wait_for_timeout(3000)  # ✅ IMPORTANT
+            page.goto(url, timeout=60000)
+            page.wait_for_timeout(3000)
 
-        for i in range(5):
-            logging.info(f"Scrolling {i+1}")
-            page.mouse.wheel(0, 5000)
-            page.wait_for_timeout(2000)
+            for i in range(5):
+                page.mouse.wheel(0, 5000)
+                page.wait_for_timeout(2000)
 
-        title = page.title()
+            title = page.title()
 
-        browser.close()
+            browser.close()
 
+    except Exception as e:
+        logging.error(f"Dynamic scrape error: {e}", exc_info=True)
+        return {"title": "Error", "images": [], "videos": []}
+
+    # ALWAYS runs
     media_urls = list(set(media_urls))
-
-    logging.info(f"Captured {len(media_urls)} media URLs")
-    logging.info(f"Sample: {media_urls[:5]}")
 
     images = [
         u for u in media_urls
         if (
-            any(ext in u.lower() for ext in [".jpg", ".png", ".webp"])
+            any(ext in u.lower() for ext in [".jpg", ".png", ".webp", ".gif"])
             and "s150x150" not in u
             and "profile_pic" not in u
-            and "icon" not in u
         )
     ]
 
     videos = [
         u for u in media_urls
         if any(ext in u.lower() for ext in [".mp4", ".webm"])
-    ]     
+    ]
+
+    logging.info(f"Final Images: {len(images)}")
+    logging.info(f"Final Videos: {len(videos)}")
+
+    return {
+        "title": title if title else "No title",
+        "images": images,
+        "videos": videos
+    }
 # -------------------------
 # BOT
 # -------------------------
@@ -166,6 +174,10 @@ def handle(msg):
 
     try:
         data = smart_scrape(url)
+
+        if not data:
+            bot.send_message(msg.chat.id, "❌ Failed to scrape data")
+            return
 
         logging.info("Scraping completed successfully")
 
