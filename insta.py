@@ -205,27 +205,22 @@ def dynamic_scrape(url):
 
             def handle_response(response):
                 try:
-                    url = response.url.lower()
+                    url = response.url
 
-                    # capture media URLs
-                    if any(ext in url for ext in [
-                        ".jpg", ".jpeg", ".png", ".webp", ".gif",
-                        ".mp4", ".webm"
-                    ]):
-                        media_urls.append(response.url)
+                    # 🔥 LOG EVERYTHING (important)
+                    logging.info(f"API CALL: {url}")
 
-                    # 🔥 capture JSON responses
+                    # capture JSON
                     if "application/json" in response.headers.get("content-type", ""):
-                        try:
-                            data = response.text()
+                        data = response.text()
 
-                            found = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', data)
+                        logging.info(f"JSON FOUND: {url}")
 
-                            for img in found:
-                                media_urls.append(img)
+                        import re
+                        found = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', data)
 
-                        except:
-                            pass
+                        for img in found:
+                            media_urls.append(img)
 
                 except Exception as e:
                     logging.warning(f"Response error: {e}")
