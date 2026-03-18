@@ -153,17 +153,23 @@ def dynamic_scrape(url):
     # ALWAYS runs
     media_urls = list(set(media_urls))
 
-    images = [
-        u for u in media_urls
-        if (
-            any(ext in u.lower() for ext in [".jpg", ".png", ".webp"])
-            and "s150x150" not in u
-            and "profile_pic" not in u
-            and "icon" not in u
-            and "logo" not in u
-            and "preview" not in u
-        )
-    ]
+    if "twitter.com" in url or "x.com" in url:
+        images = [u for u in media_urls if "twimg.com/media" in u and "name=large" in u]
+
+    elif "instagram.com" in url:
+        images = [
+            u for u in media_urls
+            if "cdninstagram.com" in u and "s150x150" not in u
+        ]
+
+    else:
+        images = [
+            u for u in media_urls
+            if (
+                any(ext in u.lower() for ext in [".jpg", ".png", ".webp"])
+                and not any(bad in u.lower() for bad in ["logo", "icon", "avatar", "thumb"])
+            )
+        ]
 
     videos = [
         u for u in media_urls
