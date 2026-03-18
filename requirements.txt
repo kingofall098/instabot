@@ -6,3 +6,4 @@ pyTelegramBotAPI
 playwright
 requests
 Pillow
+beautifulsoup4
