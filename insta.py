@@ -1,8 +1,10 @@
-# code with stealth
+# code without stealth
 import telebot
 import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 from urllib.parse import urljoin
+
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN)
 import logging
@@ -198,27 +200,10 @@ def dynamic_scrape(url):
     media_urls = []
 
     try:
-        
-
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
 
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-                viewport={"width": 1280, "height": 800},
-                locale="en-US"
-            )
-
-            # 🔥 hide automation
-            context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            """)
-
-            page = context.new_page()
-
-            page.set_extra_http_headers({
-                "Accept-Language": "en-US,en;q=0.9"
-            })
             def handle_response(response):
                 try:
                     url = response.url
@@ -227,19 +212,16 @@ def dynamic_scrape(url):
                     logging.info(f"API CALL: {url}")
 
                     # capture JSON
-                    content_type = response.headers.get("content-type", "")
+                    if "application/json" in response.headers.get("content-type", ""):
+                        data = response.text()
 
-                    if "json" in content_type or "text" in content_type:
-                        try:
-                            data = response.text()
-                            logging.info(f"JSON FOUND: {url}")
-                            found = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', data)
+                        logging.info(f"JSON FOUND: {url}")
 
-                            for img in found:
-                                media_urls.append(img)
+                        import re
+                        found = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', data)
 
-                        except:
-                            pass
+                        for img in found:
+                            media_urls.append(img)
 
                 except Exception as e:
                     logging.warning(f"Response error: {e}")
@@ -256,7 +238,7 @@ def dynamic_scrape(url):
             try:
                 dom_images = page.eval_on_selector_all(
                     "img",
-                    "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
+                    "els => els.map(e => e.src || e.getAttribute('data-src'))"
                 )
 
             except Exception as e:
