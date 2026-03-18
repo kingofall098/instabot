@@ -209,8 +209,8 @@ def dynamic_scrape(url):
                 "Accept-Language": "en-US,en;q=0.9"
             })
 
-            stealth(page)  # 🔥 bypass detection
-
+            stealth.stealth_sync(page)  # 🔥 bypass detection
+            page.goto(url, timeout=60000)
             def handle_response(response):
                 try:
                     url = response.url
