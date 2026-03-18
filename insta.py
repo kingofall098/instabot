@@ -20,7 +20,7 @@ logging.basicConfig(
     ],
 )
 
-TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("Set TELEGRAM_BOT_TOKEN environment variable")
 
