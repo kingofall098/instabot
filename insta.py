@@ -49,41 +49,6 @@ def static_scrape(url):
         "images": images,
         "videos": videos
     }
-def dynamic_scrape(url):
-    logging.info("Dynamic scraping started")
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-
-        logging.info("Opening page...")
-        page.goto(url, timeout=60000)
-
-        logging.info("Scrolling page...")
-        for _ in range(3):
-            page.mouse.wheel(0, 3000)
-            page.wait_for_timeout(1500)
-
-        title = page.title()
-        logging.info(f"Page title: {title}")
-
-        images = page.eval_on_selector_all(
-            "img", "els => els.map(e => e.src)"
-        )
-
-        videos = page.eval_on_selector_all(
-            "video", "els => els.map(e => e.src)"
-        )
-
-        logging.info(f"Collected {len(images)} images and {len(videos)} videos")
-
-        browser.close()
-
-        return {
-            "title": title,
-            "images": images,
-            "videos": videos
-        }
 # -------------------------
 # DETECTION
 # -------------------------
@@ -106,7 +71,7 @@ def static_scrape(url):
 
     images = []
     for img in soup.find_all("img"):
-        src = img.get("src")
+        src = img.get("src") or img.get("data-src")
         if src:
             images.append(urljoin(url, src))  # FIXED
 
@@ -126,36 +91,43 @@ def static_scrape(url):
 # DYNAMIC SCRAPER
 # -------------------------
 def dynamic_scrape(url):
+    logging.info("Dynamic scraping started")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
+        logging.info("Opening page...")
         page.goto(url, timeout=60000)
-        page.wait_for_timeout(3000)
 
-        # auto scroll (IMPORTANT UPGRADE)
+        logging.info("Scrolling page...")
         for _ in range(3):
             page.mouse.wheel(0, 3000)
             page.wait_for_timeout(1500)
 
         title = page.title()
+        logging.info(f"Page title: {title}")
 
         images = page.eval_on_selector_all(
-            "img", "els => els.map(e => e.src)"
+            "img",
+            "els => els.map(e => e.src || e.getAttribute('data-src'))"
         )
 
         videos = page.eval_on_selector_all(
             "video", "els => els.map(e => e.src)"
         )
 
+        logging.info(f"Collected {len(images)} images and {len(videos)} videos")
+        
+
         browser.close()
 
         return {
             "title": title,
-            "images": list(set(images)),
-            "videos": list(set(videos))
+            "images": images,
+            "videos": videos
         }
-
+        
 # -------------------------
 # MAIN ENGINE
 # -------------------------
@@ -193,7 +165,7 @@ def handle(msg):
         response += f"🎥 Videos: {len(data['videos'])}\n"
 
         bot.send_message(msg.chat.id, response)
-
+        logging.info(f"Images: {len(data['images'])}, Videos: {len(data['videos'])}")
     except Exception as e:
         logging.error(f"Error occurred: {str(e)}", exc_info=True)
         bot.send_message(msg.chat.id, "❌ Error occurred while scraping")
