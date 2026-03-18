@@ -61,7 +61,8 @@ def score_url(url):
     return score
 def is_valid_media(url):
     url = url.lower()
-    
+    if "hencover" in url or "hr_" in url:
+        return True
     # must be media type
     if not any(ext in url for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]):
         return False
@@ -78,6 +79,7 @@ def is_valid_media(url):
         return False
 
     return True
+
 from urllib.parse import urlparse
 
 def send_images(bot, chat_id, images, page_url):
@@ -224,36 +226,12 @@ def dynamic_scrape(url):
 
             def handle_response(response):
                 try:
-                    url = response.url
+                    url = response.url.lower()
 
-                    # 🔥 LOG EVERYTHING (important)
-                    logging.info(f"API CALL: {url}")
-
-                    # capture JSON
-                    content_type = response.headers.get("content-type", "")
-
-                    # 🔥 capture videos directly
-                    if any(ext in response.url for ext in [".mp4", ".webm", ".m3u8"]):
-                        media_urls.append(response.url)
-
-                    # 🔥 capture JSON/text APIs
-                    if "json" in content_type or "text" in content_type:
-                        try:
-                            data = response.text()
-                            found = re.findall(r'https://[^"]+\.(?:jpg|png|webp|mp4)', data)
-
-                            for media in found:
-                                media_urls.append(media)
-                        except:
-                            pass
-
-                        logging.info(f"JSON FOUND: {url}")
-
-                        import re
-                        found = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', data)
-
-                        for img in found:
-                            media_urls.append(img)
+                    # 🔥 ONLY collect real media URLs
+                    if any(ext in url for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]):
+                        if is_valid_media(url):
+                            media_urls.append(response.url)
 
                 except Exception as e:
                     logging.warning(f"Response error: {e}")
@@ -267,20 +245,27 @@ def dynamic_scrape(url):
                 page.mouse.wheel(0, 6000)
                 page.wait_for_timeout(2000)
             # 🔥 fallback: extract images directly from DOM
-            try:
-                dom_images = page.eval_on_selector_all(
-                    "img",
-                    "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
-                )
+            dom_images = page.eval_on_selector_all(
+                "img",
+                "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
+            )
+            
 
-            except Exception as e:
-                logging.warning(f"Basic DOM extraction failed: {e}")
+            for img in dom_images:
+                if img and is_valid_media(img):
+                    media_urls.append(img)
+            extra_images = page.eval_on_selector_all(
+                "img",
+                """els => els.map(e => 
+                    e.getAttribute('data-original') || 
+                    e.getAttribute('data-lazy') || 
+                    e.getAttribute('data-src')
+                )"""
+            )
 
-                # 🔥 fallback method
-                dom_images = page.eval_on_selector_all(
-                    "img",
-                    "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
-                )
+            for img in extra_images:
+                if img and is_valid_media(img):
+                    media_urls.append(img)
             # 🔥 extract videos from DOM
             dom_videos = page.eval_on_selector_all(
                 "video, source",
@@ -313,7 +298,8 @@ def dynamic_scrape(url):
                     media_urls.append(img)
             title = page.title()
             browser.close()
-
+        logging.info(f"Collected raw URLs: {len(media_urls)}")
+        logging.info(f"Sample: {media_urls[:5]}")
     except Exception as e:
         logging.error(f"Dynamic scrape error: {e}", exc_info=True)
         return {"title": "Error", "images": [], "videos": []}
