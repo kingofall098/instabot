@@ -19,7 +19,7 @@ logging.basicConfig(
     ],
 )
 
-TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("Set TELEGRAM_BOT_TOKEN environment variable")
 
@@ -176,8 +176,10 @@ def send_images(bot_client, chat_id, images, page_url, limit=10):
     }
 
     sent = 0
+    max_to_send = limit if limit is not None else len(images)
+
     for img_url in images:
-        if sent >= limit:
+        if sent >= max_to_send:
             break
 
         try:
@@ -192,7 +194,7 @@ def send_images(bot_client, chat_id, images, page_url, limit=10):
         try:
             bot_client.send_photo(chat_id, img_url)
             sent += 1
-            logging.info("Sent image via URL (%s/%s)", sent, limit)
+            logging.info("Sent image via URL (%s/%s)", sent, max_to_send)
             continue
         except Exception as exc:
             logging.warning("Direct photo send failed, downloading: %s", exc)
@@ -202,7 +204,7 @@ def send_images(bot_client, chat_id, images, page_url, limit=10):
             if res.status_code == 200:
                 bot_client.send_photo(chat_id, res.content)
                 sent += 1
-                logging.info("Sent image via download (%s/%s)", sent, limit)
+                logging.info("Sent image via download (%s/%s)", sent, max_to_send)
         except Exception as exc:
             logging.warning("Final image send failed: %s", exc)
 
@@ -325,51 +327,51 @@ def collect_dom_media(page):
     return media_urls
 
 
-def dynamic_scrape(url):
-    logging.info("Dynamic scrape started: %s", url)
+def _dynamic_scrape_on_page(page, url):
     media_urls = []
     title = "No title"
+    handle_response = None
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-
-            def handle_response(response):
-                try:
-                    candidate = response.url
-                    if has_any_ext(candidate, MEDIA_EXTS) and is_valid_media(candidate):
-                        media_urls.append(candidate)
-                except Exception as exc:
-                    logging.warning("Response hook error: %s", exc)
-
-            page.on("response", handle_response)
-
+        def handle_response(response):
             try:
-                page.goto(url, timeout=30000, wait_until="domcontentloaded")
-                page.wait_for_timeout(2500)
+                candidate = response.url
+                if has_any_ext(candidate, MEDIA_EXTS) and is_valid_media(candidate):
+                    media_urls.append(candidate)
             except Exception as exc:
-                browser.close()
-                logging.warning("Timeout/loading error for %s: %s", url, exc)
-                return {"title": "Timeout", "images": [], "videos": []}
+                logging.warning("Response hook error: %s", exc)
 
-            handle_popups(page)
-            page.wait_for_timeout(2000)
+        page.on("response", handle_response)
 
-            analysis = analyze_page(page)
-            strategy = decide_strategy(analysis)
-            logging.info("Analysis: %s", analysis)
-            logging.info("Strategy: %s", strategy)
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+        except Exception as exc:
+            logging.warning("Timeout/loading error for %s: %s", url, exc)
+            return {"title": "Timeout", "images": [], "videos": []}
 
-            run_page_strategy(page, strategy)
-            media_urls.extend(collect_dom_media(page))
+        handle_popups(page)
+        page.wait_for_timeout(2000)
 
-            title = page.title() or "No title"
-            browser.close()
+        analysis = analyze_page(page)
+        strategy = decide_strategy(analysis)
+        logging.info("Analysis: %s", analysis)
+        logging.info("Strategy: %s", strategy)
+
+        run_page_strategy(page, strategy)
+        media_urls.extend(collect_dom_media(page))
+        title = page.title() or "No title"
 
     except Exception as exc:
         logging.error("Dynamic scrape error: %s", exc, exc_info=True)
         return {"title": "Error", "images": [], "videos": []}
+    finally:
+        if handle_response is not None:
+            try:
+                # Prevent response listeners from stacking when reusing the same page.
+                page.remove_listener("response", handle_response)
+            except Exception:
+                pass
 
     media_urls = dedupe_keep_order(media_urls)
     media_urls = [u for u in media_urls if is_valid_media(u)]
@@ -393,6 +395,20 @@ def dynamic_scrape(url):
         "images": images,
         "videos": videos,
     }
+
+
+def dynamic_scrape(url):
+    logging.info("Dynamic scrape started: %s", url)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            result = _dynamic_scrape_on_page(page, url)
+            browser.close()
+            return result
+    except Exception as exc:
+        logging.error("Dynamic wrapper error: %s", exc, exc_info=True)
+        return {"title": "Error", "images": [], "videos": []}
 
 
 def scrape_youtube(url):
@@ -438,31 +454,37 @@ def scrape_chapter(base_url, bot_client, chat_id, max_pages=50):
     all_images = []
     seen = set()
 
-    for i in range(1, max_pages + 1):
-        if i == 1 or i % 5 == 0:
-            bot_client.send_message(chat_id, f"Scraping page {i}...")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-        page_url = f"{base_url}{i}/"
-        logging.info("Scraping chapter page %s: %s", i, page_url)
+        for i in range(1, max_pages + 1):
+            if i == 1 or i % 5 == 0:
+                bot_client.send_message(chat_id, f"Scraping page {i}...")
 
-        data = dynamic_scrape(page_url)
-        page_images = data.get("images", []) if data else []
+            page_url = f"{base_url}{i}/"
+            logging.info("Scraping chapter page %s: %s", i, page_url)
 
-        if not page_images:
-            logging.info("Stopping chapter scrape: no images on page %s", i)
-            break
+            data = _dynamic_scrape_on_page(page, page_url)
+            page_images = data.get("images", []) if data else []
 
-        added = 0
-        for img in page_images:
-            if img not in seen:
-                seen.add(img)
-                all_images.append(img)
-                added += 1
+            if not page_images:
+                logging.info("Stopping chapter scrape: no images on page %s", i)
+                break
 
-        logging.info("Chapter page %s added %s images (total=%s)", i, added, len(all_images))
-        if added == 0:
-            logging.info("Stopping chapter scrape: no new images")
-            break
+            added = 0
+            for img in page_images:
+                if img not in seen:
+                    seen.add(img)
+                    all_images.append(img)
+                    added += 1
+
+            logging.info("Chapter page %s added %s images (total=%s)", i, added, len(all_images))
+            if added == 0:
+                logging.info("Stopping chapter scrape: no new images")
+                break
+
+        browser.close()
 
     return all_images
 
@@ -534,8 +556,9 @@ def handle(msg):
         )
         bot.send_message(msg.chat.id, summary)
 
+        image_limit = None if base_url else 10
         if images:
-            send_images(bot, msg.chat.id, images, url, limit=10)
+            send_images(bot, msg.chat.id, images, url, limit=image_limit)
 
         if videos:
             send_videos(bot, msg.chat.id, videos, url, limit=2)
