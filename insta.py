@@ -169,14 +169,13 @@ def dynamic_scrape(url):
 
             def handle_response(response):
                 try:
-                    content_type = response.headers.get("content-type", "").lower()
-                    url_res = response.url.lower()
+                    url = response.url.lower()
 
-                    if (
-                        "image" in content_type
-                        or "video" in content_type
-                        or any(ext in url_res for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm"])
-                    ):
+                    # capture anything that LOOKS like media
+                    if any(ext in url for ext in [
+                        ".jpg", ".jpeg", ".png", ".webp", ".gif",
+                        ".mp4", ".webm", ".m3u8"
+                    ]):
                         media_urls.append(response.url)
 
                 except Exception as e:
@@ -187,8 +186,8 @@ def dynamic_scrape(url):
             page.goto(url, timeout=60000)
             page.wait_for_timeout(3000)
 
-            for i in range(5):
-                page.mouse.wheel(0, 5000)
+            for i in range(6):
+                page.mouse.wheel(0, 6000)
                 page.wait_for_timeout(2000)
 
             title = page.title()
@@ -203,15 +202,15 @@ def dynamic_scrape(url):
     # keep order + remove duplicates
 
     # remove duplicates but keep order
+    # remove duplicates
     seen = set()
-    clean_media = []
+    media_urls = [u for u in media_urls if not (u in seen or seen.add(u))]
 
-    for u in media_urls:
-        if u not in seen:
-            seen.add(u)
-            clean_media.append(u)
+    # filter valid
+    media_urls = [u for u in media_urls if is_valid_media(u)]
 
-    media_urls = clean_media
+    # sort best first
+    media_urls = sorted(media_urls, key=score_url, reverse=True)
 
     # filter
     images = [u for u in media_urls if is_valid_media(u) and any(ext in u for ext in [".jpg", ".png", ".webp"])]
