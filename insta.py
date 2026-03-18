@@ -2,7 +2,6 @@
 import telebot
 import requests
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
 from urllib.parse import urljoin
 from playwright_stealth import stealth
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
@@ -258,7 +257,7 @@ def dynamic_scrape(url):
             try:
                 dom_images = page.eval_on_selector_all(
                     "img",
-                    "els => els.map(e => els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
+                    "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
                 )
 
             except Exception as e:
