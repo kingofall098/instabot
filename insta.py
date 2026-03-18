@@ -87,7 +87,8 @@ def scrape_chapter(base_url, bot,chat_id):
 
     for i in range(1, 50):
         # 🔥 SEND PROGRESS
-        bot.send_message(chat_id, f"📄 Scraping page {i}...")
+        if i % 3 == 1:
+            bot.send_message(chat_id, f"📄 Scraping page {i}...")
 
         page_url = f"{base_url}{i}/"
         logging.info(f"Scraping page {i}: {page_url}")
@@ -296,7 +297,11 @@ def dynamic_scrape(url):
 
             page.on("response", handle_response)
 
-            page.goto(url, timeout=60000)
+            try:
+                page.goto(url, timeout=30000)
+            except Exception:
+                logging.warning(f"Timeout loading: {url}")
+                return {"title": "Timeout", "images": [], "videos": []}
             
             analysis = analyze_page(page)
             strategy = decide_strategy(analysis)
@@ -369,27 +374,27 @@ def dynamic_scrape(url):
                 if v:
                     media_urls.append(v)
             # 🔥 extract page HTML content
-            html = page.content()
+            # html = page.content()
 
-            import re
+            # import re
 
-            # find image URLs inside scripts
-            found = re.findall(r'https://[^"]+\.jpg', html)
+            # # find image URLs inside scripts
+            # found = re.findall(r'https://[^"]+\.jpg', html)
 
-            for img in found:
-                media_urls.append(img)
-            # 🔥 extract JSON-like image data
-            json_images = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', html)
+            # for img in found:
+            #     media_urls.append(img)
+            # # 🔥 extract JSON-like image data
+            # json_images = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', html)
 
-            for img in json_images:
-                media_urls.append(img)
-            logging.info(f"HTML extracted images: {len(found)}")
+            # for img in json_images:
+            #     media_urls.append(img)
+            # logging.info(f"HTML extracted images: {len(found)}")
             # ✅ process images OUTSIDE try/except
 
-            for img in dom_images:
-                if img:
-                    media_urls.append(img)
-            title = page.title()
+            # for img in dom_images:
+            #     if img:
+            #         media_urls.append(img)
+            # title = page.title()
             browser.close()
         logging.info(f"Collected raw URLs: {len(media_urls)}")
         logging.info(f"Sample: {media_urls[:5]}")
@@ -452,7 +457,12 @@ def scrape_with_pagination(base_url, max_pages=5):
 
         data = dynamic_scrape(url)
 
-        if not data["images"]:
+        if not data or not data.get('images'):
+            logging.info("Stopping: no data")
+            break
+
+        if len(data['images']) < 3:
+            logging.info("Stopping: end detected")
             break
 
         all_media.extend(data["images"])
@@ -504,7 +514,7 @@ def handle(msg):
 
         bot.send_message(msg.chat.id, response)
         # 🔥 LIMIT IMAGES
-        MAX_IMAGES = 30
+        MAX_IMAGES = 10
         data['images'] = data['images'][:MAX_IMAGES]
 
         logging.info(f"Images: {len(data['images'])}, Videos: {len(data['videos'])}")
