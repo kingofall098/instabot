@@ -241,19 +241,31 @@ def dynamic_scrape(url):
             page.goto(url, timeout=60000)
             page.wait_for_timeout(5000)
         
-            for i in range(6):
-                page.mouse.wheel(0, 6000)
-                page.wait_for_timeout(2000)
+            #scroll logic
+            # for i in range(6):
+            #     page.mouse.wheel(0, 6000)
+            #     page.wait_for_timeout(2000)
+            for i in range(10):
+                page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
+                page.wait_for_timeout(1500)
+            page.wait_for_selector("img", timeout=10000)
             # 🔥 fallback: extract images directly from DOM
+            # 🔥 STRONG DOM extraction (MAIN FIX)
             dom_images = page.eval_on_selector_all(
-                "img",
-                "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
+                "img.chapter-img, img",
+                """els => els.map(e => 
+                    e.src || 
+                    e.getAttribute('data-src') || 
+                    e.getAttribute('data-original') || 
+                    e.getAttribute('data-lazy')
+                )"""
             )
-            
 
             for img in dom_images:
                 if img and is_valid_media(img):
                     media_urls.append(img)
+            logging.info(f"Collected raw URLs: {len(media_urls)}")
+            logging.info(f"Sample: {media_urls[:5]}")
             extra_images = page.eval_on_selector_all(
                 "img",
                 """els => els.map(e => 
