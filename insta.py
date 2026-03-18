@@ -153,13 +153,15 @@ def is_blocked_or_junk_url(url):
         "avatar",
         "thumb",
         "sprite",
-        "ads",
         "banner",
         "popup",
         "favicon",
         "emoji",
     ]
     if any(k in lower for k in bad_keywords):
+        return True
+    # Avoid false positives like "uploads" containing "ads".
+    if re.search(r"(^|[/_.?&=-])ads([/_.?&=-]|$)", lower):
         return True
     if "doubleclick" in lower or "googlesyndication" in lower:
         return True
