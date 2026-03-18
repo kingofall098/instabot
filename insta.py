@@ -3,7 +3,7 @@ import telebot
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-from playwright_stealth import stealth
+# from playwright_stealth import stealth
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN)
 import logging
