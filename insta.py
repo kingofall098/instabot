@@ -70,47 +70,57 @@ def static_scrape(url):
 # DYNAMIC SCRAPER
 # =========================
 def dynamic_scrape(url):
-    logging.info("Dynamic scraping started")
+    logging.info("Deep scraping started (network mode)")
+
+    media_urls = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
+        # 🔥 Capture network responses
+        def handle_response(response):
+            try:
+                content_type = response.headers.get("content-type", "")
+
+                if "image" in content_type:
+                    media_urls.append(response.url)
+
+                if "video" in content_type:
+                    media_urls.append(response.url)
+
+                # Optional: capture JSON APIs
+                if "application/json" in content_type:
+                    data = response.text()
+                    if "image" in data or "video" in data:
+                        logging.info(f"API Data Found: {response.url}")
+
+            except Exception as e:
+                logging.warning(f"Response error: {e}")
+
+        page.on("response", handle_response)
+
         logging.info("Opening page...")
         page.goto(url, timeout=60000)
 
-        page.wait_for_selector("img", timeout=10000)
-
-        logging.info("Scrolling page...")
-        for _ in range(4):
-            page.mouse.wheel(0, 3000)
-            page.wait_for_timeout(1500)
+        # Scroll to trigger loading
+        for _ in range(5):
+            page.mouse.wheel(0, 5000)
+            page.wait_for_timeout(2000)
 
         title = page.title()
-        logging.info(f"Page title: {title}")
-
-        images = page.eval_on_selector_all(
-            "img",
-            "els => els.map(e => e.src || e.getAttribute('data-src'))"
-        )
-
-        videos = page.eval_on_selector_all(
-            "video",
-            "els => els.map(e => e.src)"
-        )
 
         browser.close()
 
-        images = list(set([i for i in images if i and i.startswith("http")]))
+        media_urls = list(set(media_urls))
 
-        logging.info(f"Collected {len(images)} images and {len(videos)} videos")
+        logging.info(f"Captured {len(media_urls)} media URLs")
 
         return {
             "title": title,
-            "images": images,
-            "videos": videos
+            "images": [u for u in media_urls if any(ext in u for ext in [".jpg", ".png", ".webp"])],
+            "videos": [u for u in media_urls if any(ext in u for ext in [".mp4", ".webm"])]
         }
-
 # =========================
 # MAIN ENGINE
 # =========================
