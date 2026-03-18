@@ -492,7 +492,12 @@ def dynamic_scrape(url):
     media_urls = sorted(media_urls, key=score_url, reverse=True)
 
     # filter
-    images = [u for u in media_urls if is_valid_media(u) and any(ext in u for ext in [".jpg", ".png", ".webp"])]
+    # in dynamic_scrape(), final image split
+    images = [
+        u for u in media_urls
+        if is_valid_media(u) and any(ext in u.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"])
+    ]
+
     videos = [u for u in media_urls if is_valid_media(u) and any(ext in u for ext in [".mp4", ".webm"])]
 
     # rank
