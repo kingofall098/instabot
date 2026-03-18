@@ -16,6 +16,29 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+import re
+
+def get_base_url(url):
+    match = re.search(r"(.*?/p/)\d+", url)
+    if match:
+        return match.group(1)
+    return None
+def scrape_chapter(base_url):
+    all_images = []
+
+    for i in range(1, 50):  # max pages
+        page_url = f"{base_url}{i}/"
+        logging.info(f"Scraping page {i}: {page_url}")
+
+        data = dynamic_scrape(page_url)
+
+        if not data['images']:
+            logging.info("No more images, stopping...")
+            break
+
+        all_images.extend(data['images'])
+
+    return all_images
 def score_url(url):
     score = 0
     url = url.lower()
@@ -59,7 +82,7 @@ def send_images(bot, chat_id, images, page_url):
     sent = 0
 
     for img_url in images:
-        if sent >= 5:
+        if sent >= 10:
             break
 
         try:
@@ -250,7 +273,20 @@ def handle(msg):
     bot.reply_to(msg, "⏳ Scraping...")
 
     try:
-        data = smart_scrape(url)
+        base_url = get_base_url(url)
+
+        if base_url:
+            logging.info("Chapter detected")
+
+            images = scrape_chapter(base_url)
+
+            data = {
+                "title": "Chapter Download",
+                "images": images,
+                "videos": []
+            }
+        else:
+            data = smart_scrape(url)
 
         if not data:
             bot.send_message(msg.chat.id, "❌ Failed to scrape data")
@@ -271,7 +307,7 @@ def handle(msg):
             send_images(bot, msg.chat.id, data['images'], url)
 
         if data['videos']:
-            send_videos(bot, msg.chat.id, data['videos'])
+            send_videos(bot, msg.chat.id, data['videos'], url)
 
         # 🔥 SEND IMAGES
         # send_images(bot, msg.chat.id, data['images'])
