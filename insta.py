@@ -20,7 +20,7 @@ logging.basicConfig(
     ],
 )
 
-TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("Set TELEGRAM_BOT_TOKEN environment variable")
 
@@ -159,9 +159,6 @@ def is_blocked_or_junk_url(url):
         "emoji",
     ]
     if any(k in lower for k in bad_keywords):
-        return True
-    # Avoid false positives like "uploads" containing "ads".
-    if re.search(r"(^|[/_.?&=-])ads([/_.?&=-]|$)", lower):
         return True
     if "doubleclick" in lower or "googlesyndication" in lower:
         return True
