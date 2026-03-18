@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from urllib.parse import urljoin
 
+
 TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
 bot = telebot.TeleBot(TOKEN)
 import logging
@@ -195,7 +196,7 @@ def is_valid_media(url):
         return True
 
     return False
-
+from urllib.parse import urlparse
 def send_images(bot, chat_id, images, page_url):
     domain = urlparse(page_url).scheme + "://" + urlparse(page_url).netloc
 
