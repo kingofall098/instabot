@@ -64,7 +64,7 @@ def is_valid_media(url):
     # must be media type
     if not any(ext in url for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]):
         return False
-    if "twimg.com/media" in url:
+    if "twimg.com/media" in url and "name=small" not in url:
         return True
     # reject common junk
     bad_keywords = ["logo", "icon", "avatar", "thumb", "sprite", "ads", "banner"]
@@ -226,16 +226,30 @@ def dynamic_scrape(url):
                 page.mouse.wheel(0, 6000)
                 page.wait_for_timeout(2000)
             # 🔥 fallback: extract images directly from DOM
-            dom_images = page.eval_on_selector_all(
-                "img",
-                "els => els.map(e => e.src || e.getAttribute('data-src'))"
-            )
+            try:
+                dom_images = page.eval_on_selector_all(
+                    "img",
+                    "els => els.map(e => e.src || e.getAttribute('data-src'))"
+                )
+
+            except Exception as e:
+                logging.warning(f"Basic DOM extraction failed: {e}")
+
+                # 🔥 fallback method
+                dom_images = page.eval_on_selector_all(
+                    "img",
+                    "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
+                )
+
+            # ✅ process images OUTSIDE try/except
+            for img in dom_images:
+                if img:
+                    media_urls.append(img)
 
             for img in dom_images:
                 if img:
                     media_urls.append(img)
             title = page.title()
-            page.wait_for_selector("img", timeout=10000)
             browser.close()
 
     except Exception as e:
