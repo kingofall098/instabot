@@ -1,4 +1,3 @@
-# code without stealth
 import telebot
 import requests
 from bs4 import BeautifulSoup
@@ -17,36 +16,6 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-import re
-
-def get_base_url(url):
-    match = re.search(r"(.*?/p/)\d+", url)
-    if match:
-        return match.group(1)
-    return None
-def scrape_chapter(base_url, bot,chat_id):
-    all_images = []
-    seen = set()
-
-    for i in range(1, 50):
-        # 🔥 SEND PROGRESS
-        bot.send_message(chat_id, f"📄 Scraping page {i}...")
-
-        page_url = f"{base_url}{i}/"
-        logging.info(f"Scraping page {i}: {page_url}")
-
-        data = dynamic_scrape(page_url)
-
-        if not data['images']:
-            logging.info("No more images, stopping...")
-            break
-
-        for img in data['images']:
-            if img not in seen:
-                seen.add(img)
-                all_images.append(img)
-
-    return all_images
 def score_url(url):
     score = 0
     url = url.lower()
@@ -61,12 +30,11 @@ def score_url(url):
     return score
 def is_valid_media(url):
     url = url.lower()
-    
+
     # must be media type
     if not any(ext in url for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]):
         return False
-    if "twimg.com/media" in url and "name=small" not in url:
-        return True
+
     # reject common junk
     bad_keywords = ["logo", "icon", "avatar", "thumb", "sprite", "ads", "banner"]
 
@@ -91,7 +59,7 @@ def send_images(bot, chat_id, images, page_url):
     sent = 0
 
     for img_url in images:
-        if sent >= 10:
+        if sent >= 5:
             break
 
         try:
@@ -106,10 +74,9 @@ def send_images(bot, chat_id, images, page_url):
 
         except Exception as e:
             logging.warning(f"Send error: {e}")
-def send_videos(bot, chat_id, videos, page_url):
+def send_videos(bot, chat_id, videos):
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": page_url
+        "User-Agent": "Mozilla/5.0"
     }
 
     for vid_url in videos[:2]:
@@ -206,22 +173,14 @@ def dynamic_scrape(url):
 
             def handle_response(response):
                 try:
-                    url = response.url
+                    url = response.url.lower()
 
-                    # 🔥 LOG EVERYTHING (important)
-                    logging.info(f"API CALL: {url}")
-
-                    # capture JSON
-                    if "application/json" in response.headers.get("content-type", ""):
-                        data = response.text()
-
-                        logging.info(f"JSON FOUND: {url}")
-
-                        import re
-                        found = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', data)
-
-                        for img in found:
-                            media_urls.append(img)
+                    # capture anything that LOOKS like media
+                    if any(ext in url for ext in [
+                        ".jpg", ".jpeg", ".png", ".webp", ".gif",
+                        ".mp4", ".webm", ".m3u8"
+                    ]):
+                        media_urls.append(response.url)
 
                 except Exception as e:
                     logging.warning(f"Response error: {e}")
@@ -229,48 +188,14 @@ def dynamic_scrape(url):
             page.on("response", handle_response)
 
             page.goto(url, timeout=60000)
-            page.wait_for_timeout(5000)
-        
+            page.wait_for_timeout(3000)
+
             for i in range(6):
                 page.mouse.wheel(0, 6000)
                 page.wait_for_timeout(2000)
-            # 🔥 fallback: extract images directly from DOM
-            try:
-                dom_images = page.eval_on_selector_all(
-                    "img",
-                    "els => els.map(e => e.src || e.getAttribute('data-src'))"
-                )
 
-            except Exception as e:
-                logging.warning(f"Basic DOM extraction failed: {e}")
-
-                # 🔥 fallback method
-                dom_images = page.eval_on_selector_all(
-                    "img",
-                    "els => els.map(e => e.src || e.getAttribute('data-src') || e.getAttribute('data-lazy-src'))"
-                )
-            # 🔥 extract page HTML content
-            html = page.content()
-
-            import re
-
-            # find image URLs inside scripts
-            found = re.findall(r'https://[^"]+\.jpg', html)
-
-            for img in found:
-                media_urls.append(img)
-            # 🔥 extract JSON-like image data
-            json_images = re.findall(r'https://[^"]+\.(?:jpg|png|webp)', html)
-
-            for img in json_images:
-                media_urls.append(img)
-            logging.info(f"HTML extracted images: {len(found)}")
-            # ✅ process images OUTSIDE try/except
-
-            for img in dom_images:
-                if img:
-                    media_urls.append(img)
             title = page.title()
+
             browser.close()
 
     except Exception as e:
@@ -279,8 +204,6 @@ def dynamic_scrape(url):
 
     # ALWAYS runs
     # keep order + remove duplicates
-
-    # remove duplicates but keep order
     # remove duplicates
     seen = set()
     media_urls = [u for u in media_urls if not (u in seen or seen.add(u))]
@@ -292,8 +215,8 @@ def dynamic_scrape(url):
     media_urls = sorted(media_urls, key=score_url, reverse=True)
 
     # filter
-    images = [u for u in media_urls if is_valid_media(u) and any(ext in u for ext in [".jpg", ".png", ".webp"])]
-    videos = [u for u in media_urls if is_valid_media(u) and any(ext in u for ext in [".mp4", ".webm"])]
+    images = [u for u in media_urls if any(ext in u for ext in [".jpg", ".png", ".webp"])]
+    videos = [u for u in media_urls if any(ext in u for ext in [".mp4", ".webm", ".m3u8"])]
 
     # rank
     images = sorted(images, key=score_url, reverse=True)
@@ -325,20 +248,7 @@ def handle(msg):
     bot.reply_to(msg, "⏳ Scraping...")
 
     try:
-        base_url = get_base_url(url)
-
-        if base_url:
-            logging.info("Chapter detected")
-
-            images = scrape_chapter(base_url, bot, msg.chat.id)
-
-            data = {
-                "title": "Chapter Download",
-                "images": images,
-                "videos": []
-            }
-        else:
-            data = smart_scrape(url)
+        data = smart_scrape(url)
 
         if not data:
             bot.send_message(msg.chat.id, "❌ Failed to scrape data")
@@ -351,9 +261,6 @@ def handle(msg):
         response += f"🎥 Videos: {len(data['videos'])}\n"
 
         bot.send_message(msg.chat.id, response)
-        # 🔥 LIMIT IMAGES
-        MAX_IMAGES = 30
-        data['images'] = data['images'][:MAX_IMAGES]
 
         logging.info(f"Images: {len(data['images'])}, Videos: {len(data['videos'])}")
 
@@ -362,7 +269,7 @@ def handle(msg):
             send_images(bot, msg.chat.id, data['images'], url)
 
         if data['videos']:
-            send_videos(bot, msg.chat.id, data['videos'], url)
+            send_videos(bot, msg.chat.id, data['videos'])
 
         # 🔥 SEND IMAGES
         # send_images(bot, msg.chat.id, data['images'])
