@@ -60,11 +60,12 @@ def score_url(url):
     return score
 def is_valid_media(url):
     url = url.lower()
-
+    
     # must be media type
     if not any(ext in url for ext in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"]):
         return False
-
+    if "twimg.com/media" in url:
+        return True
     # reject common junk
     bad_keywords = ["logo", "icon", "avatar", "thumb", "sprite", "ads", "banner"]
 
@@ -219,14 +220,22 @@ def dynamic_scrape(url):
             page.on("response", handle_response)
 
             page.goto(url, timeout=60000)
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(5000)
 
             for i in range(6):
                 page.mouse.wheel(0, 6000)
                 page.wait_for_timeout(2000)
+            # 🔥 fallback: extract images directly from DOM
+            dom_images = page.eval_on_selector_all(
+                "img",
+                "els => els.map(e => e.src || e.getAttribute('data-src'))"
+            )
 
+            for img in dom_images:
+                if img:
+                    media_urls.append(img)
             title = page.title()
-
+            page.wait_for_selector("img", timeout=10000)
             browser.close()
 
     except Exception as e:
