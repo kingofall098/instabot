@@ -18,7 +18,64 @@ logging.basicConfig(
     ]
 )
 import re
+#===================================================
+#DECTECT THE TYPE OF PAGE IN A WEBSITE
+#====================================================
+def analyze_page(page):
+    result = {
+        "has_images": False,
+        "has_videos": False,
+        "has_lazy": False,
+        "has_api": False,
+        "scroll_needed": False,
+        "pagination": False
+    }
 
+    # check images
+    imgs = page.query_selector_all("img")
+    if imgs:
+        result["has_images"] = True
+
+    # check videos
+    vids = page.query_selector_all("video")
+    if vids:
+        result["has_videos"] = True
+
+    # check lazy loading
+    lazy = page.query_selector_all("[data-src], [data-lazy], [data-original]")
+    if lazy:
+        result["has_lazy"] = True
+
+    # check load more / buttons
+    buttons = page.query_selector_all("button")
+    for b in buttons:
+        text = (b.inner_text() or "").lower()
+        if "load more" in text or "show more" in text:
+            result["scroll_needed"] = True
+
+    # check pagination links
+    links = page.query_selector_all("a")
+    for l in links:
+        href = l.get_attribute("href") or ""
+        if "/page/" in href or "?page=" in href:
+            result["pagination"] = True
+
+    return result
+#PAGE STRATERY
+def decide_strategy(analysis):
+    if analysis["has_lazy"]:
+        return "lazy_load"
+
+    if analysis["scroll_needed"]:
+        return "scroll"
+
+    if analysis["pagination"]:
+        return "pagination"
+
+    if analysis["has_images"]:
+        return "static"
+
+    return "unknown"
 def get_base_url(url):
     match = re.search(r"(.*?/p/)\d+", url)
     if match:
@@ -239,16 +296,39 @@ def dynamic_scrape(url):
             page.on("response", handle_response)
 
             page.goto(url, timeout=60000)
+            
+            analysis = analyze_page(page)
+            strategy = decide_strategy(analysis)
+
+            logging.info(f"Analysis: {analysis}")
+            logging.info(f"Strategy chosen: {strategy}")
+            page.wait_for_timeout(3000)
+
+            analysis = analyze_page(page)
+            strategy = decide_strategy(analysis)
+
+            logging.info(f"Strategy: {strategy}")
             page.wait_for_timeout(5000)
         
             #scroll logic
-            # for i in range(6):
-            #     page.mouse.wheel(0, 6000)
-            #     page.wait_for_timeout(2000)
-            for i in range(10):
-                page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
-                page.wait_for_timeout(1500)
-            page.wait_for_selector("img", timeout=10000)
+            if strategy == "scroll":
+                logging.info("Using scroll strategy")
+                for i in range(6):
+                    page.mouse.wheel(0, 6000)
+                    page.wait_for_timeout(2000)
+
+            elif strategy == "lazy_load":
+                logging.info("Using lazy load strategy")
+                page.wait_for_timeout(5000)
+
+            elif strategy == "static":
+                logging.info("Using static DOM strategy")
+
+            else:
+                logging.info("Unknown strategy → fallback scroll")
+                for i in range(3):
+                    page.mouse.wheel(0, 3000)
+                    page.wait_for_timeout(1500)
             # 🔥 fallback: extract images directly from DOM
             # 🔥 STRONG DOM extraction (MAIN FIX)
             dom_images = page.eval_on_selector_all(
@@ -362,6 +442,21 @@ def scrape_youtube(url):
             "images": [],
             "videos": [info.get("url")]
         }
+def scrape_with_pagination(base_url, max_pages=5):
+    all_media = []
+
+    for i in range(1, max_pages + 1):
+        url = f"{base_url}?page={i}"
+        logging.info(f"Scraping page {i}: {url}")
+
+        data = dynamic_scrape(url)
+
+        if not data["images"]:
+            break
+
+        all_media.extend(data["images"])
+
+    return list(set(all_media))
 # -------------------------
 # BOT
 # -------------------------
