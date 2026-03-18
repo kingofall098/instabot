@@ -86,14 +86,6 @@ def static_scrape(url):
 # -------------------------
 # DYNAMIC SCRAPER
 # -------------------------
-def dynamic_scrape(url):
-    logging.info("Deep scraping started (network mode)")
-
-    media_urls = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
 
 def dynamic_scrape(url):
     logging.info("Deep scraping started (network mode)")
