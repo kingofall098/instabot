@@ -20,7 +20,7 @@ logging.basicConfig(
     ],
 )
 
-TOKEN = "8755937047:AAHBFaKCan-W8QLls2DDJ3-XpUdyw3tP16w"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("Set TELEGRAM_BOT_TOKEN environment variable")
 
@@ -119,6 +119,16 @@ def score_url(url):
         score += 2
     if len(url) > 100:
         score += 1
+    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small"]):
+        score -= 5
+    m = re.search(r"(\d{2,4})x(\d{2,4})", lower)
+    if m:
+        w = int(m.group(1))
+        h = int(m.group(2))
+        if w * h >= 1000 * 1000:
+            score += 3
+        elif w * h <= 320 * 320:
+            score -= 3
     return score
 
 
@@ -127,8 +137,18 @@ def has_any_ext(url, exts):
     return any(ext in lower for ext in exts)
 
 
+def is_http_url(url):
+    if not url:
+        return False
+    parsed = urlparse(url)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
 def is_valid_media(url):
     if not url:
+        return False
+
+    if not is_http_url(url):
         return False
 
     lower = url.lower()
@@ -170,7 +190,7 @@ def dedupe_keep_order(items):
     return output
 
 
-def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=80):
+def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=0):
     parsed = urlparse(page_url)
     domain = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
 
@@ -189,7 +209,7 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
         try:
             head = requests.head(img_url, timeout=7, allow_redirects=True)
             size = int(head.headers.get("content-length", 0))
-            if size and size < (min_size_kb * 1024):
+            if min_size_kb and size and size < (min_size_kb * 1024):
                 logging.info("Skipped small image (<%sKB): %s", min_size_kb, img_url)
                 continue
         except Exception:
@@ -220,6 +240,8 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
         except Exception as exc:
             logging.warning("Final image send failed: %s", exc)
 
+    return sent
+
 
 def send_videos(bot_client, chat_id, videos, page_url, limit=2):
     headers = {
@@ -227,12 +249,17 @@ def send_videos(bot_client, chat_id, videos, page_url, limit=2):
         "Referer": page_url,
     }
 
+    sent = 0
     for vid_url in videos[:limit]:
+        if not is_http_url(vid_url):
+            logging.info("Skipping non-http video URL: %s", vid_url)
+            continue
+
         try:
             if ".m3u8" in vid_url.lower():
                 ydl_opts = {
                     "quiet": True,
-                    "format": "best[ext=mp4]/best",
+                    "format": "best",
                     "noplaylist": True,
                 }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -240,11 +267,13 @@ def send_videos(bot_client, chat_id, videos, page_url, limit=2):
                     direct = info.get("url")
                 if direct:
                     bot_client.send_video(chat_id, direct)
+                    sent += 1
                     continue
 
             res = requests.get(vid_url, headers=headers, timeout=15, stream=True)
             if res.status_code == 200:
                 bot_client.send_video(chat_id, vid_url)
+                sent += 1
                 continue
 
             logging.warning("Video GET check failed: %s", vid_url)
@@ -252,18 +281,17 @@ def send_videos(bot_client, chat_id, videos, page_url, limit=2):
             logging.warning("Primary video send error: %s", exc)
 
         try:
-            ydl_opts = {
-                "quiet": True,
-                "format": "best[ext=mp4]/best",
-                "noplaylist": True,
-            }
+            ydl_opts = {"quiet": True, "format": "best", "noplaylist": True}
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(vid_url, download=False)
                 direct = info.get("url")
             if direct:
                 bot_client.send_video(chat_id, direct)
+                sent += 1
         except Exception as exc:
             logging.warning("Video fallback extraction failed: %s", exc)
+
+    return sent
 
 
 def detect_site(url):
@@ -624,11 +652,16 @@ def handle(msg):
         bot.send_message(msg.chat.id, summary)
 
         image_limit = None if base_url else 10
+        sent_images = 0
         if images:
-            send_images(bot, msg.chat.id, images, url, limit=image_limit)
+            sent_images = send_images(bot, msg.chat.id, images, url, limit=image_limit)
 
+        sent_videos = 0
         if videos:
-            send_videos(bot, msg.chat.id, videos, url, limit=2)
+            sent_videos = send_videos(bot, msg.chat.id, videos, url, limit=2)
+
+        if sent_images == 0 and sent_videos == 0:
+            bot.send_message(msg.chat.id, "Scraped media, but Telegram could not deliver files from the source URLs.")
 
     except Exception as exc:
         logging.error("Handle error: %s", exc, exc_info=True)
