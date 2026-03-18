@@ -91,7 +91,7 @@ def dynamic_scrape(url):
     logging.info("Deep scraping started (network mode)")
 
     media_urls = []
-
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
@@ -132,11 +132,20 @@ def dynamic_scrape(url):
     logging.info(f"Captured {len(media_urls)} media URLs")
     logging.info(f"Sample: {media_urls[:5]}")
 
-    return {
-        "title": title,
-        "images": [u for u in media_urls if any(ext in u.lower() for ext in [".jpg", ".png", ".webp", ".gif"])],
-        "videos": [u for u in media_urls if any(ext in u.lower() for ext in [".mp4", ".webm"])]
-    }     
+    images = [
+        u for u in media_urls
+        if (
+            any(ext in u.lower() for ext in [".jpg", ".png", ".webp"])
+            and "s150x150" not in u
+            and "profile_pic" not in u
+            and "icon" not in u
+        )
+    ]
+
+    videos = [
+        u for u in media_urls
+        if any(ext in u.lower() for ext in [".mp4", ".webm"])
+    ]     
 # -------------------------
 # BOT
 # -------------------------
