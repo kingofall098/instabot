@@ -240,6 +240,20 @@ def probe_url(url, headers=None, timeout=8):
         return info
 
 
+def is_probe_image_ok(meta, url):
+    content_type = (meta.get("content_type") or "").lower()
+    status_ok = bool(meta.get("ok"))
+    looks_like_image = has_any_ext(url, IMAGE_EXTS)
+
+    if not status_ok:
+        return False
+    if content_type.startswith("text/html") or "application/json" in content_type:
+        return False
+    if content_type:
+        return content_type.startswith("image/")
+    return looks_like_image
+
+
 def scrape_direct_media_url(url):
     headers = {
         "User-Agent": DEFAULT_UA,
@@ -250,11 +264,13 @@ def scrape_direct_media_url(url):
     info = probe_url(url, headers=headers, timeout=10)
     content_type = (info.get("content_type") or "").lower()
 
-    if content_type.startswith("image/") or has_any_ext(url, IMAGE_EXTS):
+    if (content_type.startswith("image/") and info.get("ok")) or (has_any_ext(url, IMAGE_EXTS) and info.get("ok")):
         logging.info("Direct media URL detected as image: %s (ct=%s)", url, content_type)
         return {"title": "Direct Image", "images": [url], "videos": [], "blocked": False}
 
-    if content_type.startswith("video/") or ".m3u8" in url.lower() or has_any_ext(url, VIDEO_EXTS):
+    if (content_type.startswith("video/") and info.get("ok")) or ".m3u8" in url.lower() or (
+        has_any_ext(url, VIDEO_EXTS) and info.get("ok")
+    ):
         logging.info("Direct media URL detected as video: %s (ct=%s)", url, content_type)
         return {"title": "Direct Video", "images": [], "videos": [url], "blocked": False}
 
@@ -282,10 +298,8 @@ def select_best_image_candidate(img_url, headers):
         if not is_http_url(candidate):
             continue
         meta = probe_url(candidate, headers=headers, timeout=8)
-        # Prefer URLs that look/behave like images.
-        is_image_type = meta["content_type"].startswith("image/")
-        looks_like_image = has_any_ext(candidate, IMAGE_EXTS)
-        if is_image_type or looks_like_image:
+        if is_probe_image_ok(meta, candidate):
+            is_image_type = (meta["content_type"] or "").startswith("image/")
             bonus = 1_000_000 if is_image_type else 0
             meta["rank"] = bonus + meta["size"] + (score_url(candidate) * 1024)
             probed.append(meta)
@@ -346,6 +360,16 @@ def choose_best_images_for_send(images, headers, limit, probe_pool=40):
     for base in pool:
         chosen = select_best_image_candidate(base, headers)
         meta = probe_url(chosen, headers=headers, timeout=8)
+        if not is_probe_image_ok(meta, chosen):
+            if VERBOSE_MEDIA_LOGS:
+                logging.info(
+                    "Pre-send ranking skip invalid image: base=%s chosen=%s status=%s ct=%s",
+                    base,
+                    chosen,
+                    meta.get("status_code", 0),
+                    meta.get("content_type", ""),
+                )
+            continue
         rank = (meta.get("size", 0), score_url(chosen))
         ranked.append((rank, chosen, base, meta))
 
@@ -552,6 +576,17 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
         img_url = select_best_image_candidate(original_img_url, headers)
         if TRACE_URLS:
             logging.info("Send image candidate: original=%s selected=%s", original_img_url, img_url)
+
+        probe = probe_url(img_url, headers=headers, timeout=8)
+        if not is_probe_image_ok(probe, img_url):
+            if VERBOSE_MEDIA_LOGS:
+                logging.info(
+                    "Skip send non-image/bad URL: %s (status=%s ct=%s)",
+                    img_url,
+                    probe.get("status_code", 0),
+                    probe.get("content_type", ""),
+                )
+            continue
 
         try:
             head = requests.head(img_url, timeout=7, allow_redirects=True)
@@ -1160,4 +1195,4 @@ def handle(msg):
 
 
 if __name__ == "__main__":
-    bot.infinity_polling(skip_pending=True)
+    bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
