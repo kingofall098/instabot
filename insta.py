@@ -485,7 +485,7 @@ def _dynamic_scrape_on_page(page, url):
     media_urls = []
     title = "No title"
     handle_response = None
-    
+
     try:
         def handle_response(response):
             try:
@@ -520,50 +520,7 @@ def _dynamic_scrape_on_page(page, url):
         logging.info("Strategy: %s", strategy)
 
         run_page_strategy(page, strategy)
-
-        # Step 1: collect normal DOM media (your existing logic)
         media_urls.extend(collect_dom_media(page))
-
-
-        # 🔥 Step 2: CLICK IMAGES FOR HD (ADD THIS BLOCK)
-        clickable_images = page.query_selector_all("img")
-
-        for i, img in enumerate(clickable_images[:20]):  # limit for safety
-            try:
-                src_preview = img.get_attribute("src") or ""
-
-                # ❌ skip junk images
-                if not src_preview or any(x in src_preview.lower() for x in ["icon", "logo", "avatar"]):
-                    continue
-
-                current_url = page.url
-
-                img.click()
-                page.wait_for_timeout(2000)
-                if page.url != current_url:
-                    # New page opened (BEST CASE)
-                    full_img = page.query_selector("img")
-                else:
-                    # Modal case
-                    full_img = page.query_selector("img[src*='large'], img[src*='original'], img[src]")
-
-                # Step 3: extract FULL image
-                full_img = page.query_selector("img[src], video source")
-                logging.info(f"Clicked image {i}")
-                if full_img:
-                    src = full_img.get_attribute("src")
-                    if src and is_http_url(src):
-                        media_urls.append(src)
-
-                # Step 4: close popup/modal
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(1000)
-
-            except Exception as e:
-                logging.warning(f"Click failed: {e}")
-                continue
-
-
         title = page.title() or "No title"
 
     except Exception as exc:
