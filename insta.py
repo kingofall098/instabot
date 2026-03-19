@@ -11,6 +11,10 @@ import telebot
 import yt_dlp
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+try:
+    import cloudscraper
+except Exception:
+    cloudscraper = None
 
 
 logging.basicConfig(
@@ -34,7 +38,8 @@ MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 VERBOSE_MEDIA_LOGS = os.getenv("VERBOSE_MEDIA_LOGS", "1") == "1"
 TRACE_URLS = os.getenv("TRACE_URLS", "1") == "1"
-BUILD_TAG = "newtab-only-v4-v2"
+ENABLE_CLOUDSCRAPER_FALLBACK = os.getenv("ENABLE_CLOUDSCRAPER_FALLBACK", "1") == "1"
+BUILD_TAG = "newtab-only-v5-v2-cloudscraper"
 
 
 def handle_popups(page):
@@ -965,6 +970,67 @@ def static_scrape(url):
     }
 
 
+def cloudscraper_static_scrape(url):
+    if not ENABLE_CLOUDSCRAPER_FALLBACK:
+        return None
+    if cloudscraper is None:
+        logging.warning("cloudscraper fallback enabled but module not installed")
+        return None
+
+    headers = {
+        "User-Agent": DEFAULT_UA,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/",
+    }
+
+    try:
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+        res = scraper.get(url, headers=headers, timeout=25)
+
+        if res.status_code == 403:
+            logging.warning("cloudscraper returned 403 for %s", url)
+            return {"title": "Blocked", "images": [], "videos": [], "blocked": True}
+        if res.status_code >= 400:
+            logging.warning("cloudscraper non-OK status=%s for %s", res.status_code, url)
+            return {"title": "Error", "images": [], "videos": [], "blocked": False}
+
+        soup = BeautifulSoup(res.text, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else "No title"
+
+        images = extract_images_from_soup(soup, url)
+        videos = []
+        for v in soup.find_all("video"):
+            src = v.get("src")
+            if src:
+                abs_url = urljoin(url, src)
+                if is_valid_media(abs_url):
+                    videos.append(abs_url)
+
+        detail_links = collect_detail_page_links_from_soup(soup, url, max_links=30)
+        if VERBOSE_MEDIA_LOGS:
+            logging.info("cloudscraper detail links discovered=%s for %s", len(detail_links), url)
+        detail_images = crawl_detail_pages_for_images(detail_links, url, max_pages=25)
+        if detail_images:
+            images = detail_images + images
+
+        images = dedupe_keep_order(sorted(images, key=score_url, reverse=True))
+        videos = dedupe_keep_order(videos)
+        images, videos = filter_media_by_source_context(url, images, videos)
+        logging.info("cloudscraper final media count images=%s videos=%s", len(images), len(videos))
+
+        return {
+            "title": title,
+            "images": images,
+            "videos": videos,
+            "blocked": False,
+        }
+    except Exception as exc:
+        logging.warning("cloudscraper fallback failed for %s: %s", url, exc)
+        return None
+
+
 def run_page_strategy(page, strategy):
     if strategy == "scroll":
         logging.info("Using scroll strategy")
@@ -1520,8 +1586,18 @@ def smart_scrape(url):
             return dynamic_scrape(url)
 
         data = static_scrape(url)
+        if data.get("blocked"):
+            logging.warning("Static scrape blocked; trying cloudscraper fallback")
+            cs_data = cloudscraper_static_scrape(url)
+            if cs_data and (cs_data.get("images") or cs_data.get("videos")):
+                return cs_data
+
         if not data["images"] and not data["videos"]:
-            logging.warning("Static scrape returned no media; falling back to dynamic")
+            logging.warning("Static scrape returned no media; trying cloudscraper fallback")
+            cs_data = cloudscraper_static_scrape(url)
+            if cs_data and (cs_data.get("images") or cs_data.get("videos")):
+                return cs_data
+            logging.warning("No media from static/cloudscraper; falling back to dynamic")
             return dynamic_scrape(url)
 
         return data
