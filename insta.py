@@ -22,7 +22,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v18-video-script-cdn"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v19-xvideos-fix"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -190,6 +190,10 @@ def is_junk_image_url(url: str) -> bool:
         "play_white.png",
         "/player/skin/",
         "/images/premium",
+        "/v3/img/skins/",
+        "profile_default",
+        "pp_thumb",
+        "feed.png",
     ]
     return any(x in lower for x in bad)
 
@@ -504,7 +508,7 @@ def extract_video_candidates_from_html(html: str, base_url: str):
         if looks_like_video_url(m):
             urls.append(m)
     # Site-specific patterns seen on pages that store direct links in JS variables.
-    for m in re.findall(r"setVideoUrl(?:High|Low|HLS)\\(['\"]([^'\"]+)['\"]\\)", script_text):
+    for m in re.findall(r"setVideoUrl(?:High|Low|HLS)\(['\"]([^'\"]+)['\"]\)", script_text):
         if m:
             candidate = urljoin(base_url, m)
             if looks_like_video_url(candidate):
@@ -833,6 +837,12 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 raw_video_candidates.extend(fetch_video_candidates_via_requests(page.url))
             video_candidates = filter_video_candidates_for_page(page.url, raw_video_candidates)[:MAX_VIDEOS]
             total_videos = len(video_candidates)
+
+            # On xvideos video pages, avoid sending unrelated thumbnail/assets when video is available.
+            lower_page_url = page.url.lower()
+            if "xvideos.com/video" in lower_page_url and total_videos > 0:
+                candidates = []
+                total_found = 0
 
             bot.send_message(
                 chat_id,
