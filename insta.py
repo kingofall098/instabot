@@ -22,7 +22,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v19-xvideos-fix"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v20-xnxx-video-priority"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -194,6 +194,7 @@ def is_junk_image_url(url: str) -> bool:
         "profile_default",
         "pp_thumb",
         "feed.png",
+        "/xnxx-cdn.com/v3/img/skins/",
     ]
     return any(x in lower for x in bad)
 
@@ -840,7 +841,10 @@ def scrape_and_send_images(chat_id: int, page_url: str):
 
             # On xvideos video pages, avoid sending unrelated thumbnail/assets when video is available.
             lower_page_url = page.url.lower()
-            if "xvideos.com/video" in lower_page_url and total_videos > 0:
+            if (
+                ("xvideos.com/video" in lower_page_url or "xnxx.com/video" in lower_page_url)
+                and total_videos > 0
+            ):
                 candidates = []
                 total_found = 0
 
