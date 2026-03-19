@@ -2,6 +2,7 @@ import io
 import logging
 import os
 import re
+import time
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -157,6 +158,8 @@ def score_url(url) :
         score -= 5
     if "/contents/categories/" in lower:
         score -= 12
+    if "st.megatube.xxx" in lower and "/contents/albums/sources/" in lower:
+        score += 14
     m = re.search(r"(\d{2,4})x(\d{2,4})", lower)
     if m:
         w = int(m.group(1))
@@ -328,21 +331,37 @@ def expand_image_candidates(url):
         return []
 
     candidates = [url]
+    lower_url = url.lower()
+    is_megatube = "megatube.xxx" in lower_url or "mt-static.com" in lower_url
 
     # Common size tokens in image CDNs: /236x/... or /960x540/... etc.
     sized_path = re.search(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", url, flags=re.IGNORECASE)
-    if sized_path:
+    if sized_path and not is_megatube:
         candidates.append(re.sub(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", "/originals/", url, flags=re.IGNORECASE))
         candidates.append(re.sub(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", "/1200x/", url, flags=re.IGNORECASE))
-    # Megatube: overview thumbs -> source full image
-    candidates.append(
-        re.sub(
-            r"/contents/albums_overview/(\d+)/(\d+)/(?:\d+x\d+|originals|1200x)/(\d+)\.(jpg|jpeg|png|webp|avif|gif)",
-            r"/contents/albums/sources/\1/\2/\3.\4",
-            url,
-            flags=re.IGNORECASE,
-        )
+
+    # Megatube/mt-static: prefer st.megatube.xxx source URLs (usually valid high-res).
+    m_overview = re.search(
+        r"/contents/albums_overview/(\d+)/(\d+)/(?:\d+x\d+|originals|1200x)/(\d+)\.(jpg|jpeg|png|webp|avif|gif)",
+        url,
+        flags=re.IGNORECASE,
     )
+    if m_overview:
+        g1, g2, img_id, ext = m_overview.groups()
+        src_base = f"https://st.megatube.xxx/contents/albums/sources/{g1}/{g2}/{img_id}.{ext.lower()}"
+        candidates.append(src_base)
+        candidates.append(f"{src_base}?rnd={int(time.time())}")
+
+    m_sources = re.search(
+        r"/contents/albums/sources/(\d+)/(\d+)/(\d+)\.(jpg|jpeg|png|webp|avif|gif)",
+        url,
+        flags=re.IGNORECASE,
+    )
+    if m_sources:
+        g1, g2, img_id, ext = m_sources.groups()
+        src_base = f"https://st.megatube.xxx/contents/albums/sources/{g1}/{g2}/{img_id}.{ext.lower()}"
+        candidates.append(src_base)
+        candidates.append(f"{src_base}?rnd={int(time.time())}")
 
     # WordPress and similar: image-800x525.jpg -> image.jpg
     candidates.append(
@@ -959,11 +978,19 @@ def collect_dom_media(page):
 
 def click_open_images_for_hd(page, media_urls, max_clicks=6):
     try:
-        clickable_images = page.query_selector_all("a img")
+        clickable_images = page.query_selector_all("img")
         if not clickable_images:
-            logging.info("No clickable images found")
             return
 
+        # Prioritize likely content images over tiny UI assets.
+        def image_score(img):
+            src = (img.get_attribute("src") or img.get_attribute("data-src") or "").lower()
+            score = len(src)
+            if any(x in src for x in ["thumb", "icon", "logo", "avatar", "sprite"]):
+                score -= 1000
+            return score
+
+        clickable_images = sorted(clickable_images, key=image_score, reverse=True)[: max_clicks * 3]
         clicked = 0
 
         for i, img in enumerate(clickable_images):
@@ -971,73 +998,108 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
                 break
 
             try:
-                src = img.get_attribute("src") or ""
-                if not src:
+                src_preview = img.get_attribute("src") or img.get_attribute("data-src") or ""
+                if not src_preview:
                     continue
-
-                if any(x in src.lower() for x in ["icon", "logo", "avatar", "sprite", "thumb"]):
+                low = src_preview.lower()
+                if any(x in low for x in ["icon", "logo", "avatar", "thumb", "sprite"]):
                     continue
-
-                link = img.evaluate_handle("el => el.closest('a')")
-                if not link:
-                    continue
-
-                logging.info(f"[CLICK-FIX] Clicking image {i}: {src}")
 
                 current_url = page.url
+                logging.info("[CLICK] Trying image %s src=%s", i, src_preview)
+
+                parent_link = None
+                try:
+                    parent_link = img.evaluate_handle("el => el.closest('a')")
+                except Exception:
+                    parent_link = None
 
                 new_page = None
                 try:
                     with page.context.expect_page(timeout=2500) as new_page_info:
-                        link.click()
+                        img.scroll_into_view_if_needed()
+                        if parent_link:
+                            parent_link.click()
+                        else:
+                            img.click()
                     new_page = new_page_info.value
-                except:
+                except Exception:
                     new_page = None
 
-                # ✅ NEW TAB CASE
-                if new_page:
+                if new_page is not None:
                     clicked += 1
-                    logging.info("✅ New tab opened")
+                    logging.info("[CLICK] New tab opened for image %s", i)
+                    try:
+                        new_page.wait_for_load_state("domcontentloaded", timeout=12000)
+                    except Exception:
+                        pass
+                    handle_popups(new_page)
+                    new_page.wait_for_timeout(1000)
 
-                    new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    dl = extract_download_url_from_tab(new_page)
+                    if dl:
+                        media_urls.append(dl)
+                        logging.info("[HD-DOWNLOAD-BTN] %s", dl)
 
                     tab_media = collect_dom_media(new_page)
                     media_urls.extend(tab_media)
+                    if TRACE_URLS and tab_media:
+                        for j, u in enumerate(tab_media[:10], start=1):
+                            logging.info("[HD-NEWTAB-%s] %s", j, u)
 
-                    new_page.close()
+                    try:
+                        new_page.close()
+                    except Exception:
+                        pass
                     continue
 
-                # ✅ SAME TAB CASE
+                # Same-tab navigation case
                 page.wait_for_timeout(1200)
-
                 if page.url != current_url:
                     clicked += 1
-                    logging.info("✅ Same tab navigation")
+                    logging.info("[CLICK] Same-tab navigation for image %s -> %s", i, page.url)
+
+                    dl = extract_download_url_from_tab(page)
+                    if dl:
+                        media_urls.append(dl)
+                        logging.info("[HD-DOWNLOAD-BTN] %s", dl)
 
                     nav_media = collect_dom_media(page)
                     media_urls.extend(nav_media)
+                    if TRACE_URLS and nav_media:
+                        for j, u in enumerate(nav_media[:10], start=1):
+                            logging.info("[HD-NAV-%s] %s", j, u)
 
-                    page.go_back()
-                    page.wait_for_timeout(800)
+                    try:
+                        page.go_back(timeout=12000)
+                        page.wait_for_timeout(800)
+                    except Exception:
+                        pass
                     continue
 
-                # ✅ MODAL CASE
+                # Modal/lightbox case
                 modal_media = collect_dom_media(page)
                 if modal_media:
                     clicked += 1
-                    logging.info("✅ Modal detected")
-
                     media_urls.extend(modal_media)
+                    logging.info("[CLICK] Modal/media capture for image %s count=%s", i, len(modal_media))
+                    if TRACE_URLS:
+                        for j, u in enumerate(modal_media[:10], start=1):
+                            logging.info("[HD-MODAL-%s] %s", j, u)
 
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(500)
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(600)
+                except Exception:
+                    pass
 
-            except Exception as e:
-                logging.warning(f"Click failed: {e}")
+            except Exception as exc:
+                logging.warning("Click failed: %s", exc)
                 continue
 
-    except Exception as e:
-        logging.warning(f"Click system failed: {e}")
+    except Exception as exc:
+        logging.warning("Click system failed: %s", exc)
+
 
 def _dynamic_scrape_on_page(page, url):
     media_urls = []
