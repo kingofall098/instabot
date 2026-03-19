@@ -568,6 +568,14 @@ def crawl_detail_pages_with_tabs(page, detail_links, max_pages=12):
             handle_popups(tab)
             tab.wait_for_timeout(800)
 
+            # Priority 1: if page exposes a download button, use that media URL.
+            download_url = extract_download_url_from_tab(tab)
+            if download_url:
+                collected.append(download_url)
+                logging.info("Detail tab %s/%s using download button media: %s", idx, total, download_url)
+                continue
+
+            # Priority 2: fallback to direct image candidates from page DOM/network.
             tab_media = collect_dom_media(tab)
             tab_media = dedupe_keep_order([u for u in tab_media if is_http_url(u)])
             if TRACE_URLS and tab_media:
@@ -593,6 +601,55 @@ def crawl_detail_pages_with_tabs(page, detail_links, max_pages=12):
                 pass
 
     return dedupe_keep_order(collected)
+
+
+def extract_download_url_from_tab(tab):
+    selectors = [
+        "a[download]",
+        "a[href*='download']",
+        "a:has-text('Download')",
+        "button:has-text('Download')",
+        "[class*='download'] a",
+        "[id*='download'] a",
+        "[class*='download']",
+        "[id*='download']",
+    ]
+
+    for sel in selectors:
+        try:
+            elements = tab.query_selector_all(sel)
+        except Exception:
+            elements = []
+
+        for el in elements:
+            try:
+                raw = (
+                    el.get_attribute("href")
+                    or el.get_attribute("data-href")
+                    or el.get_attribute("data-url")
+                    or el.get_attribute("data-download")
+                )
+                if raw:
+                    candidate = urljoin(tab.url, raw)
+                    if is_http_url(candidate):
+                        meta = probe_url(candidate, headers={"User-Agent": DEFAULT_UA, "Referer": tab.url}, timeout=8)
+                        ct = (meta.get("content_type") or "").lower()
+                        if meta.get("ok") and (ct.startswith("image/") or has_any_ext(candidate, IMAGE_EXTS)):
+                            logging.info("Download button URL selected: %s", candidate)
+                            return candidate
+                onclick = el.get_attribute("onclick") or ""
+                match = re.search(r"https?://[^'\"\\s]+", onclick)
+                if match:
+                    candidate = match.group(0)
+                    meta = probe_url(candidate, headers={"User-Agent": DEFAULT_UA, "Referer": tab.url}, timeout=8)
+                    ct = (meta.get("content_type") or "").lower()
+                    if meta.get("ok") and (ct.startswith("image/") or has_any_ext(candidate, IMAGE_EXTS)):
+                        logging.info("Download button onclick URL selected: %s", candidate)
+                        return candidate
+            except Exception:
+                continue
+
+    return None
 
 
 def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=0):
