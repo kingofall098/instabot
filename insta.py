@@ -536,9 +536,16 @@ def _dynamic_scrape_on_page(page, url):
                 if not src_preview or any(x in src_preview.lower() for x in ["icon", "logo", "avatar"]):
                     continue
 
-                img.scroll_into_view_if_needed()
+                current_url = page.url
+
                 img.click()
                 page.wait_for_timeout(2000)
+                if page.url != current_url:
+                    # New page opened (BEST CASE)
+                    full_img = page.query_selector("img")
+                else:
+                    # Modal case
+                    full_img = page.query_selector("img[src*='large'], img[src*='original'], img[src]")
 
                 # Step 3: extract FULL image
                 full_img = page.query_selector("img[src], video source")
