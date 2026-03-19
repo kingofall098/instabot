@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v10-media"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v11-media-fixes"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -73,7 +73,18 @@ def looks_like_image_page_url(url: str) -> bool:
 
 def is_junk_image_url(url: str) -> bool:
     lower = (url or "").lower()
-    bad = ["logo", "icon", "sprite", "favicon", "/contents/categories/", "last_category"]
+    bad = [
+        "logo",
+        "icon",
+        "sprite",
+        "favicon",
+        "/contents/categories/",
+        "last_category",
+        "premium.png",
+        "play_white.png",
+        "/player/skin/",
+        "/images/premium",
+    ]
     return any(x in lower for x in bad)
 
 
@@ -235,6 +246,11 @@ def apply_dominant_gallery_id_filter(urls):
 
 def extract_megatube_album_id(page_url: str):
     m = re.search(r"/albums/(\d+)/", page_url.lower())
+    return m.group(1) if m else None
+
+
+def extract_megatube_video_id(page_url: str):
+    m = re.search(r"/videos/(\d+)/", page_url.lower())
     return m.group(1) if m else None
 
 
@@ -409,6 +425,18 @@ def filter_candidates_for_page(page_url: str, candidates):
     cleaned = [u for u in cleaned if is_relevant_to_page(u, page_host, tokens)]
 
     lower_page = page_url.lower()
+    if "megatube.xxx" in lower_page and "/videos/" in lower_page:
+        video_id = extract_megatube_video_id(page_url)
+        if video_id:
+            token = f"/{video_id}/"
+            video_images = []
+            for u in cleaned:
+                lu = u.lower()
+                if "/contents/videos_screenshots/" in lu and token in lu:
+                    video_images.append(u)
+            if video_images:
+                return choose_best_variant_per_image(dedupe_keep_order(video_images))
+
     if "megatube.xxx" in lower_page:
         album_id = extract_megatube_album_id(page_url)
         if album_id:
@@ -477,6 +505,22 @@ def resolve_image_in_new_tab(context, source_page_url: str, candidate_url: str):
 def resolve_video_in_new_tab(context, source_page_url: str, candidate_url: str):
     tab = None
     try:
+        # Direct downloadable media URL: avoid page.goto because it may trigger browser download.
+        if looks_like_video_url(candidate_url) or "/get_file/" in candidate_url.lower():
+            try:
+                h = requests.head(
+                    candidate_url,
+                    headers={"User-Agent": DEFAULT_UA, "Referer": source_page_url},
+                    timeout=15,
+                    allow_redirects=True,
+                )
+                ct = (h.headers.get("content-type") or "").lower()
+                if h.status_code < 400 and (ct.startswith("video/") or "application/vnd.apple.mpegurl" in ct or looks_like_video_url(candidate_url)):
+                    return candidate_url
+            except Exception:
+                if looks_like_video_url(candidate_url):
+                    return candidate_url
+
         tab = context.new_page()
         response = tab.goto(candidate_url, timeout=30000, wait_until="domcontentloaded")
         final_url = tab.url
@@ -513,6 +557,8 @@ def resolve_video_in_new_tab(context, source_page_url: str, candidate_url: str):
                 return u
         return None
     except Exception as exc:
+        if "Download is starting" in str(exc) and looks_like_video_url(candidate_url):
+            return candidate_url
         logging.warning("new-tab video resolve failed for %s: %s", candidate_url, exc)
         return None
     finally:
