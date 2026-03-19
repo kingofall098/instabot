@@ -26,10 +26,12 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
-IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif")
 VIDEO_EXTS = (".mp4", ".webm")
 MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+VERBOSE_MEDIA_LOGS = os.getenv("VERBOSE_MEDIA_LOGS", "1") == "1"
+TRACE_URLS = os.getenv("TRACE_URLS", "1") == "1"
 
 
 def handle_popups(page):
@@ -94,6 +96,37 @@ def analyze_page(page):
     return result
 
 
+def is_protection_page(page):
+    try:
+        title = (page.title() or "").lower()
+    except Exception:
+        title = ""
+
+    markers = [
+        "just a moment",
+        "attention required",
+        "cloudflare",
+        "access denied",
+        "forbidden",
+    ]
+    if any(m in title for m in markers):
+        return True
+
+    try:
+        html = (page.content() or "").lower()
+    except Exception:
+        return False
+
+    html_markers = [
+        "cf-challenge",
+        "cloudflare",
+        "access denied",
+        "error 403",
+        "forbidden",
+    ]
+    return any(m in html for m in html_markers)
+
+
 def decide_strategy(analysis):
     if analysis["has_lazy"]:
         return "lazy_load"
@@ -151,16 +184,10 @@ def is_blocked_or_junk_url(url):
         "logo",
         "icon",
         "avatar",
-        "thumb",
-        "sprite",
-        "banner",
-        "popup",
         "favicon",
         "emoji",
     ]
     if any(k in lower for k in bad_keywords):
-        return True
-    if "doubleclick" in lower or "googlesyndication" in lower:
         return True
     return False
 
@@ -195,6 +222,52 @@ def dedupe_keep_order(items):
     return output
 
 
+def probe_url(url, headers=None, timeout=8):
+    info = {"url": url, "ok": False, "size": 0, "content_type": "", "status_code": 0}
+    try:
+        res = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        info["status_code"] = res.status_code
+        info["content_type"] = (res.headers.get("content-type") or "").lower()
+        info["size"] = int(res.headers.get("content-length", 0) or 0)
+        info["ok"] = 200 <= res.status_code < 400
+        return info
+    except Exception:
+        return info
+
+
+def select_best_image_candidate(img_url, headers):
+    candidates = dedupe_keep_order(expand_image_candidates(img_url) + [img_url])
+    probed = []
+
+    for candidate in candidates:
+        if not is_http_url(candidate):
+            continue
+        meta = probe_url(candidate, headers=headers, timeout=8)
+        # Prefer URLs that look/behave like images.
+        is_image_type = meta["content_type"].startswith("image/")
+        looks_like_image = has_any_ext(candidate, IMAGE_EXTS)
+        if is_image_type or looks_like_image:
+            bonus = 1_000_000 if is_image_type else 0
+            meta["rank"] = bonus + meta["size"] + (score_url(candidate) * 1024)
+            probed.append(meta)
+        elif VERBOSE_MEDIA_LOGS:
+            logging.info("Probe reject non-image: %s (ct=%s status=%s)", candidate, meta["content_type"], meta["status_code"])
+
+    if not probed:
+        if VERBOSE_MEDIA_LOGS:
+            logging.info("No better candidate found, using original: %s", img_url)
+        return img_url
+
+    best = sorted(probed, key=lambda x: x["rank"], reverse=True)[0]
+    if VERBOSE_MEDIA_LOGS:
+        summary = ", ".join(
+            f"{m['url']} [ct={m['content_type'] or '-'} size={m['size']}]"
+            for m in sorted(probed, key=lambda x: x["rank"], reverse=True)[:4]
+        )
+        logging.info("Image candidate selection: base=%s | chosen=%s | options=%s", img_url, best["url"], summary)
+    return best["url"]
+
+
 def expand_image_candidates(url):
     if not url:
         return []
@@ -216,6 +289,168 @@ def expand_image_candidates(url):
     return dedupe_keep_order(candidates)
 
 
+def extract_images_from_soup(soup, base_url):
+    urls = []
+    img_attrs = ["src", "data-src", "data-original", "data-full", "data-zoom-image", "data-large-file"]
+
+    for img in soup.find_all("img"):
+        for attr in img_attrs:
+            val = img.get(attr)
+            if val:
+                urls.append(urljoin(base_url, val))
+
+        for set_attr in ["srcset", "data-srcset"]:
+            srcset = img.get(set_attr)
+            if srcset:
+                for part in srcset.split(","):
+                    candidate = part.strip().split(" ")[0]
+                    if candidate:
+                        urls.append(urljoin(base_url, candidate))
+
+    for meta in soup.select(
+        "meta[property='og:image'], meta[name='twitter:image'], meta[property='og:image:url']"
+    ):
+        content = meta.get("content")
+        if content:
+            urls.append(urljoin(base_url, content))
+
+    cleaned = []
+    for u in urls:
+        if is_http_url(u) and not is_blocked_or_junk_url(u):
+            if has_any_ext(u, IMAGE_EXTS) or "image" in u.lower():
+                cleaned.extend(expand_image_candidates(u))
+
+    cleaned = dedupe_keep_order(cleaned)
+    cleaned = [u for u in cleaned if is_valid_media(u)]
+    return sorted(cleaned, key=score_url, reverse=True)
+
+
+def collect_detail_page_links_from_soup(soup, base_url, max_links=20):
+    base_host = (urlparse(base_url).netloc or "").lower()
+    links = []
+
+    for a in soup.select("a[href]"):
+        href = a.get("href")
+        if not href:
+            continue
+        normalized = urljoin(base_url, href)
+        if not is_http_url(normalized):
+            continue
+        parsed = urlparse(normalized)
+        if parsed.netloc.lower() != base_host:
+            continue
+        lower = normalized.lower()
+        if has_any_ext(lower, IMAGE_EXTS) or has_any_ext(lower, VIDEO_EXTS):
+            continue
+        if any(k in lower for k in ["#comment", "#reply", "tag=", "sort=", "page="]):
+            continue
+        if any(k in lower for k in ["/photo", "/image", "/pic", "/gallery", "/view", "/p/"]):
+            links.append(normalized)
+
+    return dedupe_keep_order(links)[:max_links]
+
+
+def crawl_detail_pages_for_images(detail_urls, referer_url, max_pages=20):
+    if not detail_urls:
+        return []
+
+    parsed = urlparse(referer_url)
+    domain = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else referer_url
+    headers = {
+        "User-Agent": DEFAULT_UA,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": domain,
+    }
+
+    collected = []
+    for idx, detail_url in enumerate(detail_urls[:max_pages], start=1):
+        try:
+            res = requests.get(detail_url, headers=headers, timeout=15)
+            if res.status_code != 200:
+                continue
+            soup = BeautifulSoup(res.text, "html.parser")
+            images = extract_images_from_soup(soup, detail_url)
+            if images:
+                collected.append(images[0])  # take best/full-size candidate per detail page
+                logging.info("Detail page %s/%s -> image found", idx, min(len(detail_urls), max_pages))
+        except Exception as exc:
+            logging.warning("Detail page crawl failed for %s: %s", detail_url, exc)
+
+    return dedupe_keep_order(collected)
+
+
+def collect_detail_page_links_from_dom(page, max_links=20):
+    try:
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href || e.getAttribute('href'))")
+    except Exception:
+        return []
+
+    base_url = page.url
+    base_host = (urlparse(base_url).netloc or "").lower()
+    links = []
+    for raw in hrefs:
+        if not raw:
+            continue
+        normalized = urljoin(base_url, raw)
+        if not is_http_url(normalized):
+            continue
+        parsed = urlparse(normalized)
+        if parsed.netloc.lower() != base_host:
+            continue
+        lower = normalized.lower()
+        if has_any_ext(lower, IMAGE_EXTS) or has_any_ext(lower, VIDEO_EXTS):
+            continue
+        if any(k in lower for k in ["#comment", "#reply", "tag=", "sort=", "page="]):
+            continue
+        if any(k in lower for k in ["/photo", "/image", "/pic", "/gallery", "/view", "/p/"]):
+            links.append(normalized)
+
+    return dedupe_keep_order(links)[:max_links]
+
+
+def crawl_detail_pages_with_tabs(page, detail_links, max_pages=12):
+    collected = []
+    context = page.context
+    total = min(len(detail_links), max_pages)
+
+    for idx, detail_url in enumerate(detail_links[:max_pages], start=1):
+        tab = None
+        try:
+            logging.info("Detail tab %s/%s opening: %s", idx, total, detail_url)
+            tab = context.new_page()
+            tab.goto(detail_url, timeout=25000, wait_until="domcontentloaded")
+            tab.wait_for_timeout(1200)
+            logging.info("Detail tab %s/%s loaded: final_url=%s title=%s", idx, total, tab.url, tab.title())
+            handle_popups(tab)
+            tab.wait_for_timeout(800)
+
+            tab_media = collect_dom_media(tab)
+            tab_media = dedupe_keep_order([u for u in tab_media if is_http_url(u)])
+            if TRACE_URLS and tab_media:
+                for media_idx, media_url in enumerate(tab_media[:12], start=1):
+                    logging.info("Detail tab %s media url [%s]: %s", idx, media_idx, media_url)
+            tab_images = [u for u in tab_media if has_any_ext(u, IMAGE_EXTS)]
+
+            if tab_images:
+                tab_images = sorted(tab_images, key=score_url, reverse=True)
+                best = tab_images[0]
+                collected.append(best)
+                logging.info("Detail tab %s/%s picked image: %s", idx, total, best)
+            elif VERBOSE_MEDIA_LOGS:
+                logging.info("Detail tab %s/%s found no image: %s", idx, total, detail_url)
+        except Exception as exc:
+            logging.warning("Detail tab crawl failed (%s): %s", detail_url, exc)
+        finally:
+            try:
+                if tab is not None:
+                    logging.info("Detail tab %s/%s closing: %s", idx, total, detail_url)
+                    tab.close()
+            except Exception:
+                pass
+
+    return dedupe_keep_order(collected)
+
+
 def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=0):
     parsed = urlparse(page_url)
     domain = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
@@ -228,9 +463,13 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
     sent = 0
     max_to_send = limit if limit is not None else len(images)
 
-    for img_url in images:
+    for original_img_url in images:
         if sent >= max_to_send:
             break
+
+        img_url = select_best_image_candidate(original_img_url, headers)
+        if TRACE_URLS:
+            logging.info("Send image candidate: original=%s selected=%s", original_img_url, img_url)
 
         try:
             head = requests.head(img_url, timeout=7, allow_redirects=True)
@@ -263,6 +502,8 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
                     bot_client.send_photo(chat_id, res.content)
                 sent += 1
                 logging.info("Sent image via download (%s/%s)", sent, max_to_send)
+            elif VERBOSE_MEDIA_LOGS:
+                logging.info("Image download not OK: %s status=%s", img_url, res.status_code)
         except Exception as exc:
             logging.warning("Final image send failed: %s", exc)
 
@@ -349,7 +590,7 @@ def static_scrape(url):
     res = requests.get(url, headers=headers, timeout=20)
     if res.status_code == 403:
         logging.warning("403 detected (blocked)")
-        return {"title": "Blocked", "images": [], "videos": []}
+        return {"title": "Blocked", "images": [], "videos": [], "blocked": True}
 
     soup = BeautifulSoup(res.text, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else "No title"
@@ -361,6 +602,7 @@ def static_scrape(url):
             abs_url = urljoin(url, src)
             if is_valid_media(abs_url):
                 images.append(abs_url)
+                images.extend(expand_image_candidates(abs_url))
 
     videos = []
     for v in soup.find_all("video"):
@@ -370,13 +612,27 @@ def static_scrape(url):
             if is_valid_media(abs_url):
                 videos.append(abs_url)
 
+    # If only thumbnails were found, open likely detail pages and extract full-size images.
+    if len(images) < 8:
+        detail_links = collect_detail_page_links_from_soup(soup, url, max_links=20)
+        if VERBOSE_MEDIA_LOGS:
+            logging.info("Static detail links discovered=%s for %s", len(detail_links), url)
+        detail_images = crawl_detail_pages_for_images(detail_links, url, max_pages=20)
+        images.extend(detail_images)
+        if VERBOSE_MEDIA_LOGS:
+            logging.info("Static detail images added=%s", len(detail_images))
+
     images = dedupe_keep_order(images)
     videos = dedupe_keep_order(videos)
+    images = sorted(images, key=score_url, reverse=True)
+    if VERBOSE_MEDIA_LOGS:
+        logging.info("Static final media count images=%s videos=%s", len(images), len(videos))
 
     return {
         "title": title,
         "images": images,
         "videos": videos,
+        "blocked": False,
     }
 
 
@@ -478,11 +734,18 @@ def collect_dom_media(page):
     )
     media_urls.extend(normalize(meta_media, expect_media=True))
 
+    if VERBOSE_MEDIA_LOGS:
+        logging.info("DOM media collected raw count=%s on %s", len(media_urls), page.url)
+        if TRACE_URLS and media_urls:
+            for idx, media_url in enumerate(media_urls[:20], start=1):
+                logging.info("DOM media url [%s]: %s", idx, media_url)
     return media_urls
 
 
 def _dynamic_scrape_on_page(page, url):
     media_urls = []
+    response_image_urls = set()
+    response_video_urls = set()
     title = "No title"
     handle_response = None
 
@@ -497,6 +760,10 @@ def _dynamic_scrape_on_page(page, url):
                     return
                 if (is_video_type or is_image_type) and is_http_url(candidate):
                     media_urls.append(candidate)
+                    if is_video_type:
+                        response_video_urls.add(candidate)
+                    if is_image_type:
+                        response_image_urls.add(candidate)
                 elif has_any_ext(candidate, MEDIA_EXTS) and is_valid_media(candidate):
                     media_urls.append(candidate)
             except Exception as exc:
@@ -511,6 +778,10 @@ def _dynamic_scrape_on_page(page, url):
             logging.warning("Timeout/loading error for %s: %s", url, exc)
             return {"title": "Timeout", "images": [], "videos": []}
 
+        if is_protection_page(page):
+            logging.warning("Protection page detected for %s", url)
+            return {"title": "Blocked by site protection", "images": [], "videos": [], "blocked": True}
+
         handle_popups(page)
         page.wait_for_timeout(2000)
 
@@ -520,120 +791,25 @@ def _dynamic_scrape_on_page(page, url):
         logging.info("Strategy: %s", strategy)
 
         run_page_strategy(page, strategy)
-
-        # Step 1: normal scraping
-        media_urls.extend(collect_dom_media(page))
-
-
-        # 🔥 Step 2: click-based scraping
-        clickable_images = page.query_selector_all("img")
-
-        for i, img in enumerate(clickable_images[:15]):
-            try:
-                src_preview = img.get_attribute("src") or ""
-
-                if not src_preview:
-                    continue
-
-                if any(x in src_preview.lower() for x in ["icon", "logo", "avatar", "thumb"]):
-                    continue
-
-                img.scroll_into_view_if_needed()
-
-                # ✅ PUT YOUR expect_page BLOCK HERE
-                try:
-                    with page.context.expect_page(timeout=3000) as new_page_info:
-                        img.click()
-
-                    new_page = new_page_info.value
-                    new_page.wait_for_load_state()
-
-                    logging.info("✅ New page opened!")
-
-                    full_img = new_page.query_selector("img")
-                    if full_img:
-                        src = full_img.get_attribute("src")
-                        logging.info(f"HD from new page: {src}")
-                        media_urls.append(src)
-
-                    new_page.close()
-
-                except:
-                    logging.info("❌ No new page, maybe modal")
-
-                    # 👉 fallback: modal extraction
-                    modal_img = page.query_selector("img[src*='large'], img[src*='original'], img[src]")
-                    if modal_img:
-                        src = modal_img.get_attribute("src")
-                        if src:
-                            logging.info(f"Modal image: {src}")
-                            media_urls.append(src)
-
-                    # close modal if exists
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(1000)
-
-            except Exception as e:
-                logging.warning(f"Click failed: {e}")
-                continue
-        
-
-        # Step 1: collect visible media
-        media_urls.extend(collect_dom_media(page))
-
-
-        # 🔥 Step 2: CLICK IMAGES FOR HD (ADD THIS)
-        clickable_images = page.query_selector_all("img")
-
-        # sort by likely quality (longer URLs = better)
-        clickable_images = sorted(
-            clickable_images,
-            key=lambda img: len((img.get_attribute("src") or "")),
-            reverse=True
-        )
-
-        for i, img in enumerate(clickable_images[:15]):
-            try:
-                src_preview = img.get_attribute("src") or ""
-
-                if not src_preview:
-                    continue
-
-                if any(x in src_preview.lower() for x in ["icon", "logo", "avatar", "thumb"]):
-                    continue
-
-                current_url = page.url
-
-                img.scroll_into_view_if_needed()
-                logging.info(f"Trying to click image {i}")
-                parent = img.evaluate_handle("el => el.closest('a')")
-                if parent:
-                    parent.click()
-                else:
-                    img.click()
-                logging.info(f"Clicked image {i}")
-                page.wait_for_timeout(2000)
-
-                # ✅ detect if page changed
-                if page.url != current_url:
-                    full_img = page.query_selector("img")
-                else:
-                    # modal case
-                    full_img = page.query_selector("img[src*='large'], img[src*='original'], img[src]")
-
-                if full_img:
-                    src = full_img.get_attribute("src")
-                    if src and is_http_url(src):
-                        media_urls.append(src)
-                        logging.info(f"HD Image Found: {src}")
-
-                # close modal
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(1000)
-
-            except Exception as e:
-                logging.warning(f"Click failed: {e}")
-                continue
+        dom_urls = collect_dom_media(page)
+        media_urls.extend(dom_urls)
+        if VERBOSE_MEDIA_LOGS:
+            logging.info("After DOM extraction count=%s", len(media_urls))
+        detail_links = collect_detail_page_links_from_dom(page, max_links=20)
+        if VERBOSE_MEDIA_LOGS:
+            logging.info("Detail links discovered (dom)=%s", len(detail_links))
+            if TRACE_URLS and detail_links:
+                for idx, link in enumerate(detail_links[:30], start=1):
+                    logging.info("Detail link [%s]: %s", idx, link)
+        if detail_links:
+            detail_images = crawl_detail_pages_for_images(detail_links, page.url, max_pages=20)
+            media_urls.extend(detail_images)
+            if VERBOSE_MEDIA_LOGS:
+                logging.info("Detail images added=%s total_now=%s", len(detail_images), len(media_urls))
+            tab_images = crawl_detail_pages_with_tabs(page, detail_links, max_pages=12)
+            media_urls.extend(tab_images)
+            if VERBOSE_MEDIA_LOGS:
+                logging.info("Detail tab images added=%s total_now=%s", len(tab_images), len(media_urls))
         title = page.title() or "No title"
 
     except Exception as exc:
@@ -648,7 +824,11 @@ def _dynamic_scrape_on_page(page, url):
                 pass
 
     media_urls = dedupe_keep_order(media_urls)
-    media_urls = [u for u in media_urls if is_valid_media(u)]
+    if VERBOSE_MEDIA_LOGS:
+        logging.info("Post-dedupe media count=%s", len(media_urls))
+    media_urls = [u for u in media_urls if is_http_url(u) and not is_blocked_or_junk_url(u)]
+    if VERBOSE_MEDIA_LOGS:
+        logging.info("Post-http/junk-filter media count=%s", len(media_urls))
 
     expanded = []
     for u in media_urls:
@@ -657,15 +837,21 @@ def _dynamic_scrape_on_page(page, url):
         else:
             expanded.append(u)
     media_urls = dedupe_keep_order(expanded)
-    media_urls = [u for u in media_urls if is_valid_media(u)]
+    if VERBOSE_MEDIA_LOGS:
+        logging.info("Post-expand media count=%s", len(media_urls))
+    media_urls = [u for u in media_urls if is_valid_media(u) or u in response_image_urls or u in response_video_urls]
+    if VERBOSE_MEDIA_LOGS:
+        logging.info(
+            "Post-valid-filter media count=%s (typed_images=%s typed_videos=%s)",
+            len(media_urls),
+            len(response_image_urls),
+            len(response_video_urls),
+        )
 
     media_urls = sorted(media_urls, key=score_url, reverse=True)
 
-    def is_image_like(url):
-        return any(x in url.lower() for x in ["jpg", "jpeg", "png", "webp", "image", "img"])
-
-    images = [u for u in media_urls if is_image_like(u)]
-    videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS) or ".m3u8" in u.lower()]
+    images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS) or u in response_image_urls]
+    videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS) or ".m3u8" in u.lower() or u in response_video_urls]
 
     def extract_page_number(candidate):
         m = re.search(r"hr_(\d+)", candidate)
@@ -681,6 +867,7 @@ def _dynamic_scrape_on_page(page, url):
         "title": title,
         "images": images,
         "videos": videos,
+        "blocked": False,
     }
 
 
@@ -718,6 +905,7 @@ def scrape_youtube(url):
         "title": info.get("title", "YouTube"),
         "images": [],
         "videos": [info.get("url")],
+        "blocked": False,
     }
 
 
@@ -838,6 +1026,7 @@ def handle(msg):
                 "title": "Chapter Download",
                 "images": images,
                 "videos": [],
+                "blocked": False,
             }
         else:
             data = smart_scrape(url)
@@ -849,6 +1038,14 @@ def handle(msg):
         title = data.get("title", "No title")
         images = data.get("images", [])
         videos = data.get("videos", [])
+        blocked = data.get("blocked", False)
+
+        if blocked and not images and not videos:
+            bot.send_message(
+                msg.chat.id,
+                "This site is blocking automated access (HTTP 403 / protection page), so no media can be fetched right now.",
+            )
+            return
 
         summary = (
             f"Title: {title}\n"
