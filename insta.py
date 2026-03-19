@@ -1016,7 +1016,7 @@ def _dynamic_scrape_on_page(page, url):
         m = re.search(r"hr_(\d+)", candidate)
         return int(m.group(1)) if m else 0
 
-    images = sorted(images, key=extract_page_number)
+    images = sorted(images, key=score_url, reverse=True)
     videos = sorted(videos, key=score_url, reverse=True)
 
     logging.info("Final images: %s", len(images))
