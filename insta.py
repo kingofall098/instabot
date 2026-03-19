@@ -1,3 +1,4 @@
+#perfect code
 import io
 import logging
 import os
@@ -452,41 +453,6 @@ def filter_media_by_source_context(source_url, images, videos):
     return images, videos
 
 
-def filter_relevant_images(source_url, images):
-    source_host = (urlparse(source_url).netloc or "").lower()
-    if not source_host:
-        return images
-
-    def domain_match(target_host):
-        target_host = (target_host or "").lower()
-        return target_host == source_host or target_host.endswith("." + source_host)
-
-    allowed_extra = (
-        "uuu.cam",
-        "st.megatube.xxx",
-        "mt-static.com",
-    )
-
-    kept = []
-    for img in images:
-        host = (urlparse(img).netloc or "").lower()
-        if domain_match(host):
-            kept.append(img)
-            continue
-        if any(host == d or host.endswith("." + d) for d in allowed_extra):
-            kept.append(img)
-            continue
-
-    if VERBOSE_MEDIA_LOGS:
-        logging.info(
-            "Relevant image filter: source=%s kept=%s dropped=%s",
-            source_host,
-            len(kept),
-            max(0, len(images) - len(kept)),
-        )
-    return kept or images
-
-
 def extract_images_from_soup(soup, base_url):
     urls = []
     img_attrs = ["src", "data-src", "data-original", "data-full", "data-zoom-image", "data-large-file"]
@@ -894,7 +860,6 @@ def static_scrape(url):
     videos = dedupe_keep_order(videos)
     images = sorted(images, key=score_url, reverse=True)
     images, videos = filter_media_by_source_context(url, images, videos)
-    images = filter_relevant_images(url, images)
     if VERBOSE_MEDIA_LOGS:
         logging.info("Static final media count images=%s videos=%s", len(images), len(videos))
 
@@ -1016,7 +981,7 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
     try:
         clickable_images = page.query_selector_all("img")
         if not clickable_images:
-            return 0
+            return
 
         # Prioritize likely content images over tiny UI assets.
         def image_score(img):
@@ -1133,10 +1098,8 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
                 logging.warning("Click failed: %s", exc)
                 continue
 
-        return clicked
     except Exception as exc:
         logging.warning("Click system failed: %s", exc)
-        return 0
 
 
 def _dynamic_scrape_on_page(page, url):
@@ -1193,8 +1156,7 @@ def _dynamic_scrape_on_page(page, url):
         logging.info("Strategy: %s", strategy)
 
         run_page_strategy(page, strategy)
-        clicked_count = click_open_images_for_hd(page, media_urls, max_clicks=10)
-        logging.info("Click extraction interacted with %s images", clicked_count)
+        click_open_images_for_hd(page, media_urls, max_clicks=6)
         dom_urls = collect_dom_media(page)
         media_urls.extend(dom_urls)
         if VERBOSE_MEDIA_LOGS:
@@ -1257,7 +1219,6 @@ def _dynamic_scrape_on_page(page, url):
     images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS) or u in response_image_urls]
     videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS) or ".m3u8" in u.lower() or u in response_video_urls]
     images, videos = filter_media_by_source_context(url, images, videos)
-    images = filter_relevant_images(url, images)
 
     def extract_page_number(candidate):
         m = re.search(r"hr_(\d+)", candidate)
@@ -1328,8 +1289,16 @@ def smart_scrape(url):
 
         if site == "youtube":
             return scrape_youtube(url)
-        # Force browser-interaction path so thumbnail click/open logic always runs.
-        return dynamic_scrape(url)
+
+        if is_dynamic(url):
+            return dynamic_scrape(url)
+
+        data = static_scrape(url)
+        if not data["images"] and not data["videos"]:
+            logging.warning("Static scrape returned no media; falling back to dynamic")
+            return dynamic_scrape(url)
+
+        return data
     except Exception as exc:
         logging.warning("Error in smart_scrape, falling back to dynamic: %s", exc)
         return dynamic_scrape(url)
