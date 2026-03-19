@@ -18,14 +18,17 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v8-hq-dedupe"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v10-media"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
+VIDEO_EXTS = (".mp4", ".webm", ".m4v", ".mov")
 MAX_IMAGES = int(os.getenv("MAX_IMAGES", "50"))
+MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
+MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "40"))
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -55,6 +58,11 @@ def dedupe_keep_order(items):
 def looks_like_image_url(url: str) -> bool:
     lower = (url or "").lower()
     return any(ext in lower for ext in IMAGE_EXTS)
+
+
+def looks_like_video_url(url: str) -> bool:
+    lower = (url or "").lower()
+    return any(ext in lower for ext in VIDEO_EXTS) or ".m3u8" in lower
 
 
 def looks_like_image_page_url(url: str) -> bool:
@@ -317,6 +325,74 @@ def fetch_candidates_via_requests(page_url: str):
     return []
 
 
+def fetch_video_candidates_via_requests(page_url: str):
+    headers = {
+        "User-Agent": DEFAULT_UA,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/",
+    }
+    try:
+        r = requests.get(page_url, headers=headers, timeout=25)
+        if r.status_code == 200 and r.text:
+            return extract_video_candidates_from_html(r.text, page_url)
+    except Exception:
+        pass
+    return []
+
+
+def extract_video_candidates_from_html(html: str, base_url: str):
+    soup = BeautifulSoup(html, "html.parser")
+    urls = []
+
+    for v in soup.find_all("video"):
+        src = v.get("src")
+        if src:
+            urls.append(urljoin(base_url, src))
+        for s in v.find_all("source"):
+            ssrc = s.get("src")
+            if ssrc:
+                urls.append(urljoin(base_url, ssrc))
+
+    for s in soup.find_all("source"):
+        ssrc = s.get("src")
+        if ssrc:
+            urls.append(urljoin(base_url, ssrc))
+
+    for a in soup.select("a[href]"):
+        href = a.get("href")
+        if href:
+            abs_href = urljoin(base_url, href)
+            if looks_like_video_url(abs_href):
+                urls.append(abs_href)
+
+    for meta in soup.select(
+        "meta[property='og:video'], meta[property='og:video:url'], meta[name='twitter:player:stream']"
+    ):
+        c = meta.get("content")
+        if c:
+            urls.append(urljoin(base_url, c))
+
+    return [u for u in dedupe_keep_order(urls) if is_http_url(u)]
+
+
+def filter_video_candidates_for_page(page_url: str, candidates):
+    page_host = (urlparse(page_url).netloc or "").lower()
+    tokens = extract_page_tokens(page_url)
+    cleaned = []
+    for u in candidates:
+        if not is_http_url(u):
+            continue
+        if not looks_like_video_url(u):
+            continue
+        if not is_relevant_to_page(u, page_host, tokens):
+            continue
+        cleaned.append(u)
+
+    cleaned = dedupe_keep_order(cleaned)
+    cleaned = apply_dominant_gallery_id_filter(cleaned)
+    return dedupe_keep_order(cleaned)
+
+
 def filter_candidates_for_page(page_url: str, candidates):
     cleaned = []
     for u in candidates:
@@ -398,6 +474,55 @@ def resolve_image_in_new_tab(context, source_page_url: str, candidate_url: str):
             pass
 
 
+def resolve_video_in_new_tab(context, source_page_url: str, candidate_url: str):
+    tab = None
+    try:
+        tab = context.new_page()
+        response = tab.goto(candidate_url, timeout=30000, wait_until="domcontentloaded")
+        final_url = tab.url
+
+        try:
+            content_type = (response.headers.get("content-type") or "").lower() if response else ""
+        except Exception:
+            content_type = ""
+
+        if is_http_url(final_url) and (content_type.startswith("video/") or "application/vnd.apple.mpegurl" in content_type):
+            return final_url
+        if is_http_url(final_url) and looks_like_video_url(final_url):
+            return final_url
+
+        dom_videos = tab.eval_on_selector_all(
+            "video, source, a[href]",
+            """els => {
+                const out = [];
+                for (const e of els) {
+                    const src = e.src || e.getAttribute('src');
+                    const href = e.href || e.getAttribute('href');
+                    if (src) out.push(src);
+                    if (href) out.push(href);
+                }
+                return out;
+            }""",
+        )
+        candidates = [urljoin(tab.url, x) for x in dom_videos if x]
+        if is_http_url(final_url):
+            candidates.insert(0, final_url)
+
+        for u in dedupe_keep_order(candidates):
+            if is_http_url(u) and looks_like_video_url(u):
+                return u
+        return None
+    except Exception as exc:
+        logging.warning("new-tab video resolve failed for %s: %s", candidate_url, exc)
+        return None
+    finally:
+        try:
+            if tab is not None:
+                tab.close()
+        except Exception:
+            pass
+
+
 def download_image_bytes(url: str, referer: str):
     headers = {
         "User-Agent": DEFAULT_UA,
@@ -425,6 +550,46 @@ def download_image_bytes(url: str, referer: str):
     return r.content, ext
 
 
+def download_video_bytes(url: str, referer: str, max_mb: int = 40):
+    # m3u8 cannot be downloaded directly as a single binary here.
+    if ".m3u8" in url.lower():
+        return None, None
+
+    headers = {
+        "User-Agent": DEFAULT_UA,
+        "Referer": referer,
+        "Accept": "*/*",
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=40, stream=True)
+        if r.status_code != 200:
+            return None, None
+
+        ct = (r.headers.get("content-type") or "").lower()
+        if ct and not ct.startswith("video/") and not looks_like_video_url(url):
+            return None, None
+
+        max_bytes = max_mb * 1024 * 1024
+        data = bytearray()
+        for chunk in r.iter_content(chunk_size=512 * 1024):
+            if not chunk:
+                continue
+            data.extend(chunk)
+            if len(data) > max_bytes:
+                return None, None
+
+        ext = ".mp4"
+        if "webm" in ct:
+            ext = ".webm"
+        elif "quicktime" in ct:
+            ext = ".mov"
+        elif "x-m4v" in ct:
+            ext = ".m4v"
+        return bytes(data), ext
+    except Exception:
+        return None, None
+
+
 def scrape_and_send_images(chat_id: int, page_url: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -437,13 +602,16 @@ def scrape_and_send_images(chat_id: int, page_url: str):
 
         try:
             page = context.new_page()
-            response_urls = []
+            response_image_urls = []
+            response_video_urls = []
 
             def on_response(resp):
                 try:
                     ct = (resp.headers.get("content-type") or "").lower()
                     if ct.startswith("image/") and is_http_url(resp.url):
-                        response_urls.append(resp.url)
+                        response_image_urls.append(resp.url)
+                    elif (ct.startswith("video/") or "application/vnd.apple.mpegurl" in ct) and is_http_url(resp.url):
+                        response_video_urls.append(resp.url)
                 except Exception:
                     pass
 
@@ -459,16 +627,35 @@ def scrape_and_send_images(chat_id: int, page_url: str):
             raw_candidates = []
             raw_candidates.extend(extract_image_candidates_from_html(page.content(), page.url))
             raw_candidates.extend(collect_dom_candidates(page))
-            raw_candidates.extend(response_urls)
+            raw_candidates.extend(response_image_urls)
             if not raw_candidates:
                 raw_candidates.extend(fetch_candidates_via_requests(page.url))
             candidates = filter_candidates_for_page(page.url, raw_candidates)[:MAX_IMAGES]
             total_found = len(candidates)
 
-            bot.send_message(chat_id, f"Found {total_found} page images. Opening each in a new tab and downloading one by one.")
-            logging.info("Image candidates filtered=%s raw=%s url=%s", total_found, len(raw_candidates), page_url)
-            if total_found == 0:
-                bot.send_message(chat_id, "No downloadable images found on this page (it may be protected or dynamically blocked).")
+            raw_video_candidates = []
+            raw_video_candidates.extend(extract_video_candidates_from_html(page.content(), page.url))
+            raw_video_candidates.extend([u for u in collect_dom_candidates(page) if looks_like_video_url(u)])
+            raw_video_candidates.extend(response_video_urls)
+            if not raw_video_candidates:
+                raw_video_candidates.extend(fetch_video_candidates_via_requests(page.url))
+            video_candidates = filter_video_candidates_for_page(page.url, raw_video_candidates)[:MAX_VIDEOS]
+            total_videos = len(video_candidates)
+
+            bot.send_message(
+                chat_id,
+                f"Found {total_found} images and {total_videos} videos. Opening each in a new tab and downloading one by one.",
+            )
+            logging.info(
+                "Media candidates images=%s(raw=%s) videos=%s(raw=%s) url=%s",
+                total_found,
+                len(raw_candidates),
+                total_videos,
+                len(raw_video_candidates),
+                page_url,
+            )
+            if total_found == 0 and total_videos == 0:
+                bot.send_message(chat_id, "No downloadable media found on this page (it may be protected or dynamically blocked).")
                 return 0, 0
 
             sent = 0
@@ -493,8 +680,41 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 if sent <= 3 or sent % 5 == 0 or sent == total_found:
                     logging.info("Sent image %s/%s from %s", sent, total_found, best_url)
 
-            bot.send_message(chat_id, f"Done. Sent {sent} images.")
-            return sent, total_found
+            sent_videos = 0
+            sent_video_urls = set()
+            for vid_idx, v_candidate in enumerate(video_candidates, start=1):
+                resolved_video = resolve_video_in_new_tab(context, page.url, v_candidate)
+                if not resolved_video:
+                    continue
+                if resolved_video in sent_video_urls:
+                    continue
+
+                v_raw, v_ext = download_video_bytes(resolved_video, page.url, max_mb=MAX_VIDEO_MB)
+                if not v_raw:
+                    # fallback: try remote URL send
+                    try:
+                        bot.send_video(chat_id, resolved_video)
+                        sent_videos += 1
+                        sent_video_urls.add(resolved_video)
+                        if sent_videos <= 2 or sent_videos == total_videos:
+                            logging.info("Sent video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
+                    except Exception:
+                        continue
+                    continue
+
+                v_file = io.BytesIO(v_raw)
+                v_file.name = f"video_{vid_idx}{v_ext}"
+                try:
+                    bot.send_video(chat_id, v_file)
+                except Exception:
+                    bot.send_document(chat_id, v_file)
+                sent_videos += 1
+                sent_video_urls.add(resolved_video)
+                if sent_videos <= 2 or sent_videos == total_videos:
+                    logging.info("Sent video %s/%s from %s", sent_videos, total_videos, resolved_video)
+
+            bot.send_message(chat_id, f"Done. Sent {sent} images and {sent_videos} videos.")
+            return sent, sent_videos
         finally:
             try:
                 context.close()
@@ -508,7 +728,7 @@ def scrape_and_send_images(chat_id: int, page_url: str):
 
 @bot.message_handler(commands=["start"])
 def on_start(msg):
-    bot.reply_to(msg, "Send a webpage URL. I will count pictures, open each in a new tab, and download/send one-by-one.")
+    bot.reply_to(msg, "Send a webpage URL. I will count pictures/videos, open each in a new tab, and download/send one-by-one.")
 
 
 @bot.message_handler(func=lambda m: True)
