@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v7-hq"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v8-hq-dedupe"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -159,6 +159,15 @@ def expand_hq_variants(url: str):
 
     # Megatube overview -> sources.
     variants.append(expand_megatube_source_candidate(url))
+
+    # Generic filename upgrades: foo.jpg -> foobig.jpg / foo_big.jpg.
+    variants.append(re.sub(r"(\.(?:jpg|jpeg|png|webp|avif|gif))$", r"big\1", url, flags=re.IGNORECASE))
+    variants.append(re.sub(r"(\.(?:jpg|jpeg|png|webp|avif|gif))$", r"_big\1", url, flags=re.IGNORECASE))
+
+    # Thumb path upgrades used by some galleries (including auntmia-like structures).
+    if "/thumbs/" in lower:
+        variants.append(url.replace("/thumbs/", "/full/"))
+        variants.append(url.replace("/thumbs/", "/"))
 
     return dedupe_keep_order([v for v in variants if is_http_url(v)])
 
@@ -463,12 +472,15 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 return 0, 0
 
             sent = 0
+            sent_urls = set()
             for idx, candidate in enumerate(candidates, start=1):
                 resolved = resolve_image_in_new_tab(context, page.url, candidate)
                 if not resolved:
                     continue
 
                 best_url = choose_best_download_url(resolved, page.url)
+                if best_url in sent_urls:
+                    continue
                 raw, ext = download_image_bytes(best_url, page.url)
                 if not raw:
                     continue
@@ -477,6 +489,7 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 file_obj.name = f"image_{idx}{ext}"
                 bot.send_document(chat_id, file_obj)
                 sent += 1
+                sent_urls.add(best_url)
                 if sent <= 3 or sent % 5 == 0 or sent == total_found:
                     logging.info("Sent image %s/%s from %s", sent, total_found, best_url)
 
