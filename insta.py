@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v11-media-fixes"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v12-video-fallbacks"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -28,7 +28,7 @@ IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
 VIDEO_EXTS = (".mp4", ".webm", ".m4v", ".mov")
 MAX_IMAGES = int(os.getenv("MAX_IMAGES", "50"))
 MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
-MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "40"))
+MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "200"))
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -599,6 +599,7 @@ def download_image_bytes(url: str, referer: str):
 def download_video_bytes(url: str, referer: str, max_mb: int = 40):
     # m3u8 cannot be downloaded directly as a single binary here.
     if ".m3u8" in url.lower():
+        logging.info("Skip direct download for m3u8 video: %s", url)
         return None, None
 
     headers = {
@@ -609,10 +610,12 @@ def download_video_bytes(url: str, referer: str, max_mb: int = 40):
     try:
         r = requests.get(url, headers=headers, timeout=40, stream=True)
         if r.status_code != 200:
+            logging.warning("Video download status=%s for %s", r.status_code, url)
             return None, None
 
         ct = (r.headers.get("content-type") or "").lower()
         if ct and not ct.startswith("video/") and not looks_like_video_url(url):
+            logging.warning("Video content-type rejected ct=%s url=%s", ct, url)
             return None, None
 
         max_bytes = max_mb * 1024 * 1024
@@ -622,6 +625,7 @@ def download_video_bytes(url: str, referer: str, max_mb: int = 40):
                 continue
             data.extend(chunk)
             if len(data) > max_bytes:
+                logging.warning("Video exceeds MAX_VIDEO_MB=%s for %s", max_mb, url)
                 return None, None
 
         ext = ".mp4"
@@ -632,7 +636,8 @@ def download_video_bytes(url: str, referer: str, max_mb: int = 40):
         elif "x-m4v" in ct:
             ext = ".m4v"
         return bytes(data), ext
-    except Exception:
+    except Exception as exc:
+        logging.warning("Video binary download failed for %s: %s", url, exc)
         return None, None
 
 
@@ -728,9 +733,12 @@ def scrape_and_send_images(chat_id: int, page_url: str):
 
             sent_videos = 0
             sent_video_urls = set()
+            failed_videos = 0
             for vid_idx, v_candidate in enumerate(video_candidates, start=1):
                 resolved_video = resolve_video_in_new_tab(context, page.url, v_candidate)
                 if not resolved_video:
+                    failed_videos += 1
+                    logging.warning("Video resolve failed for candidate: %s", v_candidate)
                     continue
                 if resolved_video in sent_video_urls:
                     continue
@@ -744,22 +752,32 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                         sent_video_urls.add(resolved_video)
                         if sent_videos <= 2 or sent_videos == total_videos:
                             logging.info("Sent video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
-                    except Exception:
-                        continue
+                    except Exception as exc:
+                        logging.warning("send_video URL failed for %s: %s", resolved_video, exc)
+                        try:
+                            bot.send_document(chat_id, resolved_video)
+                            sent_videos += 1
+                            sent_video_urls.add(resolved_video)
+                            logging.info("Sent video as document URL from %s", resolved_video)
+                        except Exception as exc2:
+                            failed_videos += 1
+                            logging.warning("send_document URL failed for %s: %s", resolved_video, exc2)
+                            bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
                     continue
 
                 v_file = io.BytesIO(v_raw)
                 v_file.name = f"video_{vid_idx}{v_ext}"
                 try:
                     bot.send_video(chat_id, v_file)
-                except Exception:
+                except Exception as exc:
+                    logging.warning("send_video file failed for %s: %s", resolved_video, exc)
                     bot.send_document(chat_id, v_file)
                 sent_videos += 1
                 sent_video_urls.add(resolved_video)
                 if sent_videos <= 2 or sent_videos == total_videos:
                     logging.info("Sent video %s/%s from %s", sent_videos, total_videos, resolved_video)
 
-            bot.send_message(chat_id, f"Done. Sent {sent} images and {sent_videos} videos.")
+            bot.send_message(chat_id, f"Done. Sent {sent} images and {sent_videos} videos. Failed videos: {failed_videos}.")
             return sent, sent_videos
         finally:
             try:
