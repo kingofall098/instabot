@@ -22,7 +22,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v16-video-split-parts"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v17-video-priority"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -509,6 +509,25 @@ def filter_video_candidates_for_page(page_url: str, candidates):
         if not is_relevant_to_page(u, page_host, tokens):
             continue
         cleaned.append(u)
+
+    lower_page = page_url.lower()
+    if "megatube.xxx" in lower_page and "/videos/" in lower_page:
+        vid = extract_megatube_video_id(page_url)
+        if vid:
+            token = f"/{vid}/"
+            primary = []
+            secondary = []
+            for u in dedupe_keep_order(cleaned):
+                lu = u.lower()
+                if token not in lu:
+                    continue
+                if "/get_file/" in lu and ".mp4" in lu and "_pv.webm" not in lu:
+                    primary.append(u)
+                elif ".mp4" in lu and "_pv.webm" not in lu:
+                    secondary.append(u)
+            preferred = primary or secondary
+            if preferred:
+                return dedupe_keep_order(preferred)
 
     cleaned = dedupe_keep_order(cleaned)
     cleaned = apply_dominant_gallery_id_filter(cleaned)
