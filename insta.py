@@ -957,6 +957,131 @@ def collect_dom_media(page):
     return media_urls
 
 
+def click_open_images_for_hd(page, media_urls, max_clicks=6):
+    try:
+        clickable_images = page.query_selector_all("img")
+        if not clickable_images:
+            return
+
+        # Prioritize likely content images over tiny UI assets.
+        def image_score(img):
+            src = (img.get_attribute("src") or img.get_attribute("data-src") or "").lower()
+            score = len(src)
+            if any(x in src for x in ["thumb", "icon", "logo", "avatar", "sprite"]):
+                score -= 1000
+            return score
+
+        clickable_images = sorted(clickable_images, key=image_score, reverse=True)[: max_clicks * 3]
+        clicked = 0
+
+        for i, img in enumerate(clickable_images):
+            if clicked >= max_clicks:
+                break
+
+            try:
+                src_preview = img.get_attribute("src") or img.get_attribute("data-src") or ""
+                if not src_preview:
+                    continue
+                low = src_preview.lower()
+                if any(x in low for x in ["icon", "logo", "avatar", "thumb", "sprite"]):
+                    continue
+
+                current_url = page.url
+                logging.info("[CLICK] Trying image %s src=%s", i, src_preview)
+
+                parent_link = None
+                try:
+                    parent_link = img.evaluate_handle("el => el.closest('a')")
+                except Exception:
+                    parent_link = None
+
+                new_page = None
+                try:
+                    with page.context.expect_page(timeout=2500) as new_page_info:
+                        img.scroll_into_view_if_needed()
+                        if parent_link:
+                            parent_link.click()
+                        else:
+                            img.click()
+                    new_page = new_page_info.value
+                except Exception:
+                    new_page = None
+
+                if new_page is not None:
+                    clicked += 1
+                    logging.info("[CLICK] New tab opened for image %s", i)
+                    try:
+                        new_page.wait_for_load_state("domcontentloaded", timeout=12000)
+                    except Exception:
+                        pass
+                    handle_popups(new_page)
+                    new_page.wait_for_timeout(1000)
+
+                    dl = extract_download_url_from_tab(new_page)
+                    if dl:
+                        media_urls.append(dl)
+                        logging.info("[HD-DOWNLOAD-BTN] %s", dl)
+
+                    tab_media = collect_dom_media(new_page)
+                    media_urls.extend(tab_media)
+                    if TRACE_URLS and tab_media:
+                        for j, u in enumerate(tab_media[:10], start=1):
+                            logging.info("[HD-NEWTAB-%s] %s", j, u)
+
+                    try:
+                        new_page.close()
+                    except Exception:
+                        pass
+                    continue
+
+                # Same-tab navigation case
+                page.wait_for_timeout(1200)
+                if page.url != current_url:
+                    clicked += 1
+                    logging.info("[CLICK] Same-tab navigation for image %s -> %s", i, page.url)
+
+                    dl = extract_download_url_from_tab(page)
+                    if dl:
+                        media_urls.append(dl)
+                        logging.info("[HD-DOWNLOAD-BTN] %s", dl)
+
+                    nav_media = collect_dom_media(page)
+                    media_urls.extend(nav_media)
+                    if TRACE_URLS and nav_media:
+                        for j, u in enumerate(nav_media[:10], start=1):
+                            logging.info("[HD-NAV-%s] %s", j, u)
+
+                    try:
+                        page.go_back(timeout=12000)
+                        page.wait_for_timeout(800)
+                    except Exception:
+                        pass
+                    continue
+
+                # Modal/lightbox case
+                modal_media = collect_dom_media(page)
+                if modal_media:
+                    clicked += 1
+                    media_urls.extend(modal_media)
+                    logging.info("[CLICK] Modal/media capture for image %s count=%s", i, len(modal_media))
+                    if TRACE_URLS:
+                        for j, u in enumerate(modal_media[:10], start=1):
+                            logging.info("[HD-MODAL-%s] %s", j, u)
+
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(600)
+                except Exception:
+                    pass
+
+            except Exception as exc:
+                logging.warning("Click failed: %s", exc)
+                continue
+
+    except Exception as exc:
+        logging.warning("Click system failed: %s", exc)
+
+
 def _dynamic_scrape_on_page(page, url):
     media_urls = []
     response_image_urls = set()
@@ -973,12 +1098,17 @@ def _dynamic_scrape_on_page(page, url):
                 is_image_type = content_type.startswith("image/")
                 if is_blocked_or_junk_url(candidate):
                     return
-                if (is_video_type or is_image_type) and is_http_url(candidate):
-                    media_urls.append(candidate)
-                    if is_video_type:
-                        response_video_urls.add(candidate)
-                    if is_image_type:
+                if is_image_type and is_http_url(candidate):
+                    cand_lower = candidate.lower()
+                    if any(x in cand_lower for x in ["orig", "large", "1080", "1920", "sources", "full", "download"]):
+                        media_urls.append(candidate)
                         response_image_urls.add(candidate)
+                    elif has_any_ext(candidate, IMAGE_EXTS):
+                        media_urls.append(candidate)
+                        response_image_urls.add(candidate)
+                elif is_video_type and is_http_url(candidate):
+                    media_urls.append(candidate)
+                    response_video_urls.add(candidate)
                 elif has_any_ext(candidate, MEDIA_EXTS) and is_valid_media(candidate):
                     media_urls.append(candidate)
             except Exception as exc:
@@ -1006,6 +1136,7 @@ def _dynamic_scrape_on_page(page, url):
         logging.info("Strategy: %s", strategy)
 
         run_page_strategy(page, strategy)
+        click_open_images_for_hd(page, media_urls, max_clicks=6)
         dom_urls = collect_dom_media(page)
         media_urls.extend(dom_urls)
         if VERBOSE_MEDIA_LOGS:
