@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import re
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -17,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v2"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -56,6 +57,29 @@ def looks_like_image_url(url: str) -> bool:
     return any(ext in lower for ext in IMAGE_EXTS)
 
 
+def is_junk_image_url(url: str) -> bool:
+    lower = (url or "").lower()
+    bad = ["logo", "icon", "sprite", "favicon", "/contents/categories/", "last_category"]
+    return any(x in lower for x in bad)
+
+
+def extract_megatube_album_id(page_url: str):
+    m = re.search(r"/albums/(\d+)/", page_url.lower())
+    return m.group(1) if m else None
+
+
+def expand_megatube_source_candidate(url: str):
+    m = re.search(
+        r"/contents/albums_overview/(\d+)/(\d+)/(?:\d+x\d+|originals|1200x)/(\d+)\.(jpg|jpeg|png|webp|avif|gif)",
+        url,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return url
+    g1, g2, img_id, ext = m.groups()
+    return f"https://st.megatube.xxx/contents/albums/sources/{g1}/{g2}/{img_id}.{ext.lower()}"
+
+
 def extract_image_candidates_from_html(html: str, base_url: str):
     soup = BeautifulSoup(html, "html.parser")
     urls = []
@@ -90,6 +114,27 @@ def extract_image_candidates_from_html(html: str, base_url: str):
     return urls
 
 
+def filter_candidates_for_page(page_url: str, candidates):
+    cleaned = [u for u in candidates if is_http_url(u) and looks_like_image_url(u) and not is_junk_image_url(u)]
+
+    lower_page = page_url.lower()
+    if "megatube.xxx" in lower_page:
+        album_id = extract_megatube_album_id(page_url)
+        if album_id:
+            token = f"/{album_id}/"
+            album_only = []
+            for u in cleaned:
+                lu = u.lower()
+                if "/contents/albums_overview/" in lu and token in lu:
+                    album_only.append(expand_megatube_source_candidate(u))
+                elif "/contents/albums/sources/" in lu and token in lu:
+                    album_only.append(u)
+            if album_only:
+                return dedupe_keep_order(album_only)
+
+    return dedupe_keep_order(cleaned)
+
+
 def resolve_image_in_new_tab(context, source_page_url: str, candidate_url: str):
     tab = None
     try:
@@ -105,7 +150,6 @@ def resolve_image_in_new_tab(context, source_page_url: str, candidate_url: str):
         if is_http_url(final_url) and content_type.startswith("image/"):
             return final_url
 
-        # Fallback: try to discover direct image from the tab DOM.
         dom_imgs = tab.eval_on_selector_all(
             "img",
             "els => els.map(e => e.src || e.getAttribute('src') || e.getAttribute('data-src'))",
@@ -115,9 +159,7 @@ def resolve_image_in_new_tab(context, source_page_url: str, candidate_url: str):
             candidates.insert(0, final_url)
 
         for u in dedupe_keep_order(candidates):
-            if not is_http_url(u):
-                continue
-            if looks_like_image_url(u):
+            if is_http_url(u) and looks_like_image_url(u) and not is_junk_image_url(u):
                 return u
 
         return None
@@ -174,12 +216,12 @@ def scrape_and_send_images(chat_id: int, page_url: str):
             page.goto(page_url, timeout=35000, wait_until="domcontentloaded")
             page.wait_for_timeout(1500)
 
-            candidates = extract_image_candidates_from_html(page.content(), page.url)
-            candidates = dedupe_keep_order(candidates)[:MAX_IMAGES]
+            raw_candidates = extract_image_candidates_from_html(page.content(), page.url)
+            candidates = filter_candidates_for_page(page.url, raw_candidates)[:MAX_IMAGES]
             total_found = len(candidates)
 
-            bot.send_message(chat_id, f"Found {total_found} image candidates. Opening each in a new tab and downloading one by one.")
-            logging.info("Image candidates found=%s url=%s", total_found, page_url)
+            bot.send_message(chat_id, f"Found {total_found} page images. Opening each in a new tab and downloading one by one.")
+            logging.info("Image candidates filtered=%s raw=%s url=%s", total_found, len(raw_candidates), page_url)
 
             sent = 0
             for idx, candidate in enumerate(candidates, start=1):
