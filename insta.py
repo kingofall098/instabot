@@ -3,6 +3,9 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -19,7 +22,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v14-video-fileid-cache"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v15-video-compress-fallback"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -32,6 +35,7 @@ MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
 MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "200"))
 TELEGRAM_MAX_UPLOAD_MB = int(os.getenv("TELEGRAM_MAX_UPLOAD_MB", "49"))
 VIDEO_FILE_ID_CACHE_PATH = os.getenv("VIDEO_FILE_ID_CACHE_PATH", "video_file_ids.json")
+ENABLE_FFMPEG_FALLBACK = os.getenv("ENABLE_FFMPEG_FALLBACK", "1") == "1"
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -57,6 +61,72 @@ def save_video_file_id_cache(cache):
             json.dump(cache, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         logging.warning("Failed to save video file_id cache: %s", exc)
+
+
+def ffmpeg_available():
+    return shutil.which("ffmpeg") is not None
+
+
+def compress_video_bytes_to_limit(video_bytes: bytes, target_mb: int):
+    if not ENABLE_FFMPEG_FALLBACK:
+        return None
+    if not ffmpeg_available():
+        logging.warning("ffmpeg not available; compression fallback disabled")
+        return None
+
+    max_bytes = target_mb * 1024 * 1024
+    in_fd, in_path = tempfile.mkstemp(suffix=".mp4")
+    out_fd, out_path = tempfile.mkstemp(suffix="_compressed.mp4")
+    os.close(in_fd)
+    os.close(out_fd)
+    try:
+        with open(in_path, "wb") as f:
+            f.write(video_bytes)
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            in_path,
+            "-vf",
+            "scale='min(1280,iw)':-2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "30",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",
+            "-movflags",
+            "+faststart",
+            "-fs",
+            str(max_bytes),
+            out_path,
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if proc.returncode != 0:
+            logging.warning("ffmpeg compression failed")
+            return None
+        if not os.path.exists(out_path):
+            return None
+        out_size = os.path.getsize(out_path)
+        if out_size <= 0 or out_size > max_bytes:
+            return None
+        with open(out_path, "rb") as f:
+            return f.read()
+    except Exception as exc:
+        logging.warning("Compression fallback exception: %s", exc)
+        return None
+    finally:
+        for p in (in_path, out_path):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
 
 
 def is_http_url(url: str) -> bool:
@@ -821,9 +891,26 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                         if sent_videos <= 2 or sent_videos == total_videos:
                             logging.info("Sent large video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
                     except Exception as exc:
-                        failed_videos += 1
                         logging.warning("Large video URL send failed for %s: %s", resolved_video, exc)
-                        bot.send_message(chat_id, f"Video URL (too large to upload): {resolved_video}")
+                        compressed = compress_video_bytes_to_limit(v_raw, TELEGRAM_MAX_UPLOAD_MB)
+                        if compressed:
+                            c_file = io.BytesIO(compressed)
+                            c_file.name = f"video_{vid_idx}_compressed.mp4"
+                            try:
+                                msg = bot.send_video(chat_id, c_file)
+                                sent_videos += 1
+                                sent_video_urls.add(resolved_video)
+                                if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
+                                    video_file_id_cache[resolved_video] = msg.video.file_id
+                                    cache_changed = True
+                                logging.info("Sent compressed large video for %s", resolved_video)
+                            except Exception as excc:
+                                failed_videos += 1
+                                logging.warning("Compressed video send failed for %s: %s", resolved_video, excc)
+                                bot.send_message(chat_id, f"Video URL (too large to upload): {resolved_video}")
+                        else:
+                            failed_videos += 1
+                            bot.send_message(chat_id, f"Video URL (too large to upload): {resolved_video}")
                     continue
 
                 v_file = io.BytesIO(v_raw)
@@ -851,7 +938,24 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                             logging.info("Sent video via URL fallback after file failure: %s", resolved_video)
                         except Exception as exc3:
                             logging.warning("URL fallback failed for %s: %s", resolved_video, exc3)
-                            bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
+                            compressed = compress_video_bytes_to_limit(v_raw, TELEGRAM_MAX_UPLOAD_MB)
+                            if compressed:
+                                c_file = io.BytesIO(compressed)
+                                c_file.name = f"video_{vid_idx}_compressed.mp4"
+                                try:
+                                    msg = bot.send_video(chat_id, c_file)
+                                    sent_videos += 1
+                                    sent_video_urls.add(resolved_video)
+                                    if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
+                                        video_file_id_cache[resolved_video] = msg.video.file_id
+                                        cache_changed = True
+                                    logging.info("Sent compressed fallback video for %s", resolved_video)
+                                except Exception as exc4:
+                                    failed_videos += 1
+                                    logging.warning("Compressed fallback send failed for %s: %s", resolved_video, exc4)
+                                    bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
+                            else:
+                                bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
                         continue
                 sent_videos += 1
                 sent_video_urls.add(resolved_video)
