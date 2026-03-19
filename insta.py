@@ -34,7 +34,51 @@ MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 VERBOSE_MEDIA_LOGS = os.getenv("VERBOSE_MEDIA_LOGS", "1") == "1"
 TRACE_URLS = os.getenv("TRACE_URLS", "1") == "1"
-BUILD_TAG = "single-tab-v5-bypass"
+BUILD_TAG = "single-tab-v7-proxy"
+
+HTTP_PROXY_URL = os.getenv("HTTP_PROXY", "").strip() or None
+HTTPS_PROXY_URL = os.getenv("HTTPS_PROXY", "").strip() or None
+REQUESTS_PROXIES = {}
+if HTTP_PROXY_URL:
+    REQUESTS_PROXIES["http"] = HTTP_PROXY_URL
+if HTTPS_PROXY_URL:
+    REQUESTS_PROXIES["https"] = HTTPS_PROXY_URL
+REQUESTS_PROXIES = REQUESTS_PROXIES or None
+
+
+def get_playwright_proxy_config():
+    proxy_url = HTTPS_PROXY_URL or HTTP_PROXY_URL
+    if not proxy_url:
+        return None
+    parsed = urlparse(proxy_url)
+    if not parsed.scheme or not parsed.hostname:
+        return None
+
+    server = f"{parsed.scheme}://{parsed.hostname}"
+    if parsed.port:
+        server = f"{server}:{parsed.port}"
+
+    cfg = {"server": server}
+    if parsed.username:
+        cfg["username"] = parsed.username
+    if parsed.password:
+        cfg["password"] = parsed.password
+    return cfg
+
+
+PLAYWRIGHT_PROXY = get_playwright_proxy_config()
+
+
+def http_get(url, **kwargs):
+    if REQUESTS_PROXIES and "proxies" not in kwargs:
+        kwargs["proxies"] = REQUESTS_PROXIES
+    return requests.get(url, **kwargs)
+
+
+def http_head(url, **kwargs):
+    if REQUESTS_PROXIES and "proxies" not in kwargs:
+        kwargs["proxies"] = REQUESTS_PROXIES
+    return requests.head(url, **kwargs)
 
 
 def handle_popups(page):
@@ -152,11 +196,15 @@ def score_url(url) :
     lower = url.lower()
     if "large" in lower or "original" in lower:
         score += 3
+    if "full" in lower:
+        score += 2
+    if "/hd-" in lower or "hd-" in lower:
+        score += 2
     if "media" in lower:
         score += 2
     if len(url) > 100:
         score += 1
-    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small"]):
+    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small", "/thumbs/"]):
         score -= 5
     if "/contents/categories/" in lower:
         score -= 12
@@ -237,7 +285,7 @@ def dedupe_keep_order(items):
 def probe_url(url, headers=None, timeout=8):
     info = {"url": url, "ok": False, "size": 0, "content_type": "", "status_code": 0}
     try:
-        res = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        res = http_head(url, headers=headers, timeout=timeout, allow_redirects=True)
         info["status_code"] = res.status_code
         info["content_type"] = (res.headers.get("content-type") or "").lower()
         info["size"] = int(res.headers.get("content-length", 0) or 0)
@@ -283,7 +331,7 @@ def scrape_direct_media_url(url):
 
     # Fallback: try a lightweight GET for servers that do not return HEAD metadata.
     try:
-        res = requests.get(url, headers=headers, timeout=10, stream=True)
+        res = http_get(url, headers=headers, timeout=10, stream=True)
         get_ct = (res.headers.get("content-type") or "").lower()
         if get_ct.startswith("image/"):
             logging.info("Direct media GET detected image: %s (ct=%s)", url, get_ct)
@@ -479,6 +527,32 @@ def extract_images_from_soup(soup, base_url):
         if content:
             urls.append(urljoin(base_url, content))
 
+    # Capture click-through links around images (often the true full-size targets).
+    for a in soup.select("a[href]"):
+        href = a.get("href")
+        if not href:
+            continue
+        abs_href = urljoin(base_url, href)
+        lower_href = abs_href.lower()
+        has_img_child = a.find("img") is not None
+        looks_hq_target = any(k in lower_href for k in ["/original", "/full", "/sources/", "/hd-", "download"])
+        if is_http_url(abs_href) and (has_img_child or looks_hq_target):
+            if has_any_ext(lower_href, IMAGE_EXTS) or looks_hq_target:
+                urls.append(abs_href)
+
+        for attr in ["data-src", "data-original", "data-full", "data-image", "data-url", "data-href"]:
+            val = a.get(attr)
+            if not val:
+                continue
+            abs_val = urljoin(base_url, val)
+            if is_http_url(abs_val):
+                urls.append(abs_val)
+
+        onclick = a.get("onclick") or ""
+        m = re.search(r"https?://[^'\"\\s]+", onclick)
+        if m:
+            urls.append(m.group(0))
+
     cleaned = []
     for u in urls:
         if is_http_url(u) and not is_blocked_or_junk_url(u):
@@ -530,7 +604,7 @@ def crawl_detail_pages_for_images(detail_urls, referer_url, max_pages=20):
     collected = []
     for idx, detail_url in enumerate(detail_urls[:max_pages], start=1):
         try:
-            res = requests.get(detail_url, headers=headers, timeout=15)
+            res = http_get(detail_url, headers=headers, timeout=15)
             if res.status_code != 200:
                 continue
             soup = BeautifulSoup(res.text, "html.parser")
@@ -747,7 +821,10 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
     resolved_tab_cache = {}
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        launch_kwargs = {"headless": True}
+        if PLAYWRIGHT_PROXY:
+            launch_kwargs["proxy"] = PLAYWRIGHT_PROXY
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context(
             user_agent=DEFAULT_UA,
             locale="en-US",
@@ -800,7 +877,7 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
                     continue
 
                 try:
-                    head = requests.head(img_url, timeout=7, allow_redirects=True)
+                    head = http_head(img_url, timeout=7, allow_redirects=True)
                     size = int(head.headers.get("content-length", 0))
                     if min_size_kb and size and size < (min_size_kb * 1024):
                         logging.info("Skipped small image (<%sKB): %s", min_size_kb, img_url)
@@ -809,7 +886,7 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
                     pass
 
                 try:
-                    res = requests.get(img_url, headers=headers, timeout=20)
+                    res = http_get(img_url, headers=headers, timeout=20)
                     if res.status_code == 200:
                         if send_as_document:
                             file_obj = io.BytesIO(res.content)
@@ -862,7 +939,7 @@ def send_videos(bot_client, chat_id, videos, page_url, limit=2):
                     sent += 1
                     continue
 
-            res = requests.get(vid_url, headers=headers, timeout=15, stream=True)
+            res = http_get(vid_url, headers=headers, timeout=15, stream=True)
             if res.status_code == 200:
                 bot_client.send_video(chat_id, vid_url)
                 sent += 1
@@ -912,7 +989,7 @@ def static_scrape(url):
         "Referer": "https://www.google.com/",
     }
 
-    res = requests.get(url, headers=headers, timeout=20)
+    res = http_get(url, headers=headers, timeout=20)
     if res.status_code == 403:
         logging.warning("403 detected (blocked)")
         return {"title": "Blocked", "images": [], "videos": [], "blocked": True}
@@ -1334,14 +1411,17 @@ def dynamic_scrape(url):
     logging.info("Dynamic scrape started: %s", url)
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
+            launch_kwargs = {
+                "headless": True,
+                "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                 ],
-            )
+            }
+            if PLAYWRIGHT_PROXY:
+                launch_kwargs["proxy"] = PLAYWRIGHT_PROXY
+            browser = p.chromium.launch(**launch_kwargs)
 
             stealth_script = """
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -1522,7 +1602,10 @@ def scrape_chapter(base_url, bot_client, chat_id, max_pages=50):
     seen = set()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        launch_kwargs = {"headless": True}
+        if PLAYWRIGHT_PROXY:
+            launch_kwargs["proxy"] = PLAYWRIGHT_PROXY
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context(
             user_agent=DEFAULT_UA,
             locale="en-US",
@@ -1658,4 +1741,10 @@ def handle(msg):
 
 if __name__ == "__main__":
     logging.info("[BUILD %s] Bot starting with single-tab sequential image send enabled", BUILD_TAG)
+    logging.info(
+        "Proxy config: requests_http=%s requests_https=%s playwright_proxy=%s",
+        bool(HTTP_PROXY_URL),
+        bool(HTTPS_PROXY_URL),
+        bool(PLAYWRIGHT_PROXY),
+    )
     bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
