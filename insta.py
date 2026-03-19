@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v4"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v5"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -55,6 +55,12 @@ def dedupe_keep_order(items):
 def looks_like_image_url(url: str) -> bool:
     lower = (url or "").lower()
     return any(ext in lower for ext in IMAGE_EXTS)
+
+
+def looks_like_image_page_url(url: str) -> bool:
+    lower = (url or "").lower()
+    hints = ["/pin/", "/gallery/", "/photo/", "/image/", "/pic/", "/view/", "/p/"]
+    return any(h in lower for h in hints)
 
 
 def is_junk_image_url(url: str) -> bool:
@@ -228,7 +234,15 @@ def fetch_candidates_via_requests(page_url: str):
 
 
 def filter_candidates_for_page(page_url: str, candidates):
-    cleaned = [u for u in candidates if is_http_url(u) and looks_like_image_url(u) and not is_junk_image_url(u)]
+    cleaned = []
+    for u in candidates:
+        if not is_http_url(u):
+            continue
+        if is_junk_image_url(u):
+            continue
+        # Keep direct images and also clickable image-page links that resolve after opening.
+        if looks_like_image_url(u) or looks_like_image_page_url(u):
+            cleaned.append(u)
     page_host = (urlparse(page_url).netloc or "").lower()
     tokens = extract_page_tokens(page_url)
 
@@ -271,12 +285,19 @@ def resolve_image_in_new_tab(context, source_page_url: str, candidate_url: str):
             "img",
             "els => els.map(e => e.src || e.getAttribute('src') || e.getAttribute('data-src'))",
         )
+        dom_anchors = tab.eval_on_selector_all(
+            "a[href]",
+            "els => els.map(e => e.href || e.getAttribute('href'))",
+        )
         candidates = [urljoin(tab.url, x) for x in dom_imgs if x]
+        candidates.extend(urljoin(tab.url, x) for x in dom_anchors if x)
         if is_http_url(final_url):
             candidates.insert(0, final_url)
 
         for u in dedupe_keep_order(candidates):
-            if is_http_url(u) and looks_like_image_url(u) and not is_junk_image_url(u):
+            if not is_http_url(u) or is_junk_image_url(u):
+                continue
+            if looks_like_image_url(u):
                 return u
 
         return None
