@@ -1051,7 +1051,7 @@ def collect_dom_media(page):
 
 def click_open_images_for_hd(page, media_urls, max_clicks=6):
     try:
-        clickable_images = page.query_selector_all("img")
+        clickable_images = page.query_selector_all("a img")
         if not clickable_images:
             return 0
 
@@ -1127,7 +1127,7 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
                     continue
 
                 # Same-tab navigation case
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(2000)
                 if page.url != current_url:
                     clicked += 1
                     logging.info("[CLICK] Same-tab navigation for image %s -> %s", i, page.url)
@@ -1230,27 +1230,9 @@ def _dynamic_scrape_on_page(page, url):
         logging.info("Strategy: %s", strategy)
 
         run_page_strategy(page, strategy)
-        clicked_count = click_open_images_for_hd(page, media_urls, max_clicks=10)
+        logging.info("FORCE CLICK MODE ENABLED")
+        clicked_count = click_open_images_for_hd(page, media_urls, max_clicks=12)
         logging.info("Click extraction interacted with %s images", clicked_count)
-        dom_urls = collect_dom_media(page)
-        media_urls.extend(dom_urls)
-        if VERBOSE_MEDIA_LOGS:
-            logging.info("After DOM extraction count=%s", len(media_urls))
-        detail_links = collect_detail_page_links_from_dom(page, max_links=20)
-        if VERBOSE_MEDIA_LOGS:
-            logging.info("Detail links discovered (dom)=%s", len(detail_links))
-            if TRACE_URLS and detail_links:
-                for idx, link in enumerate(detail_links[:30], start=1):
-                    logging.info("Detail link [%s]: %s", idx, link)
-        if detail_links:
-            detail_images = crawl_detail_pages_for_images(detail_links, page.url, max_pages=20)
-            media_urls.extend(detail_images)
-            if VERBOSE_MEDIA_LOGS:
-                logging.info("Detail images added=%s total_now=%s", len(detail_images), len(media_urls))
-            tab_images = crawl_detail_pages_with_tabs(page, detail_links, max_pages=12)
-            media_urls.extend(tab_images)
-            if VERBOSE_MEDIA_LOGS:
-                logging.info("Detail tab images added=%s total_now=%s", len(tab_images), len(media_urls))
         title = page.title() or "No title"
 
     except Exception as exc:
@@ -1267,20 +1249,22 @@ def _dynamic_scrape_on_page(page, url):
     media_urls = dedupe_keep_order(media_urls)
     if VERBOSE_MEDIA_LOGS:
         logging.info("Post-dedupe media count=%s", len(media_urls))
+
+    hd_markers = ("large", "orig", "full", "hd", "source", "sources", "download")
+    media_urls = [
+        u for u in media_urls
+        if any(marker in u.lower() for marker in hd_markers)
+        or has_any_ext(u, VIDEO_EXTS)
+        or ".m3u8" in u.lower()
+    ]
+    if VERBOSE_MEDIA_LOGS:
+        logging.info("Post-force-hd-filter media count=%s", len(media_urls))
+
     media_urls = [u for u in media_urls if is_http_url(u) and not is_blocked_or_junk_url(u)]
     if VERBOSE_MEDIA_LOGS:
         logging.info("Post-http/junk-filter media count=%s", len(media_urls))
 
-    expanded = []
-    for u in media_urls:
-        if has_any_ext(u, IMAGE_EXTS):
-            expanded.extend(expand_image_candidates(u))
-        else:
-            expanded.append(u)
-    media_urls = dedupe_keep_order(expanded)
-    if VERBOSE_MEDIA_LOGS:
-        logging.info("Post-expand media count=%s", len(media_urls))
-    media_urls = [u for u in media_urls if is_valid_media(u) or u in response_image_urls or u in response_video_urls]
+    media_urls = [u for u in media_urls if is_valid_media(u) or u in response_video_urls]
     if VERBOSE_MEDIA_LOGS:
         logging.info(
             "Post-valid-filter media count=%s (typed_images=%s typed_videos=%s)",
@@ -1291,7 +1275,7 @@ def _dynamic_scrape_on_page(page, url):
 
     media_urls = sorted(media_urls, key=score_url, reverse=True)
 
-    images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS) or u in response_image_urls]
+    images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS)]
     videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS) or ".m3u8" in u.lower() or u in response_video_urls]
     images, videos = filter_media_by_source_context(url, images, videos)
     images = filter_relevant_images(url, images)
