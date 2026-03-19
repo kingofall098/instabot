@@ -521,6 +521,63 @@ def _dynamic_scrape_on_page(page, url):
 
         run_page_strategy(page, strategy)
 
+        # Step 1: normal scraping
+        media_urls.extend(collect_dom_media(page))
+
+
+        # 🔥 Step 2: click-based scraping
+        clickable_images = page.query_selector_all("img")
+
+        for i, img in enumerate(clickable_images[:15]):
+            try:
+                src_preview = img.get_attribute("src") or ""
+
+                if not src_preview:
+                    continue
+
+                if any(x in src_preview.lower() for x in ["icon", "logo", "avatar", "thumb"]):
+                    continue
+
+                img.scroll_into_view_if_needed()
+
+                # ✅ PUT YOUR expect_page BLOCK HERE
+                try:
+                    with page.context.expect_page(timeout=3000) as new_page_info:
+                        img.click()
+
+                    new_page = new_page_info.value
+                    new_page.wait_for_load_state()
+
+                    logging.info("✅ New page opened!")
+
+                    full_img = new_page.query_selector("img")
+                    if full_img:
+                        src = full_img.get_attribute("src")
+                        logging.info(f"HD from new page: {src}")
+                        media_urls.append(src)
+
+                    new_page.close()
+
+                except:
+                    logging.info("❌ No new page, maybe modal")
+
+                    # 👉 fallback: modal extraction
+                    modal_img = page.query_selector("img[src*='large'], img[src*='original'], img[src]")
+                    if modal_img:
+                        src = modal_img.get_attribute("src")
+                        if src:
+                            logging.info(f"Modal image: {src}")
+                            media_urls.append(src)
+
+                    # close modal if exists
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(1000)
+
+            except Exception as e:
+                logging.warning(f"Click failed: {e}")
+                continue
+        
+
         # Step 1: collect visible media
         media_urls.extend(collect_dom_media(page))
 
@@ -548,7 +605,13 @@ def _dynamic_scrape_on_page(page, url):
                 current_url = page.url
 
                 img.scroll_into_view_if_needed()
-                img.click()
+                logging.info(f"Trying to click image {i}")
+                parent = img.evaluate_handle("el => el.closest('a')")
+                if parent:
+                    parent.click()
+                else:
+                    img.click()
+                logging.info(f"Clicked image {i}")
                 page.wait_for_timeout(2000)
 
                 # ✅ detect if page changed
