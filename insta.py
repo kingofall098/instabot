@@ -155,6 +155,8 @@ def score_url(url):
         score += 1
     if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small"]):
         score -= 5
+    if "/contents/categories/" in lower:
+        score -= 12
     m = re.search(r"(\d{2,4})x(\d{2,4})", lower)
     if m:
         w = int(m.group(1))
@@ -392,6 +394,34 @@ def choose_best_images_for_send(images, headers, limit, probe_pool=40):
             ordered.append(img)
 
     return dedupe_keep_order(ordered)[:limit] if limit is not None else dedupe_keep_order(ordered)
+
+
+def filter_media_by_source_context(source_url, images, videos):
+    source_lower = (source_url or "").lower()
+    album_match = re.search(r"/albums/(\d+)/", source_lower)
+
+    # Site-specific: megatube album pages often expose unrelated category thumbs.
+    if "megatube.xxx" in source_lower and album_match:
+        album_id = album_match.group(1)
+        album_token = f"/{album_id}/"
+        album_images = [
+            u for u in images
+            if "/contents/albums_" in u.lower() and album_token in u.lower()
+        ]
+        if album_images:
+            if VERBOSE_MEDIA_LOGS:
+                logging.info(
+                    "Context filter applied: source album_id=%s kept_album_images=%s dropped=%s",
+                    album_id,
+                    len(album_images),
+                    max(0, len(images) - len(album_images)),
+                )
+            images = album_images
+        else:
+            # If no album-specific images were found, at least de-prioritize categories.
+            images = [u for u in images if "/contents/categories/" not in u.lower()] or images
+
+    return images, videos
 
 
 def extract_images_from_soup(soup, base_url):
@@ -743,6 +773,7 @@ def static_scrape(url):
     images = dedupe_keep_order(images)
     videos = dedupe_keep_order(videos)
     images = sorted(images, key=score_url, reverse=True)
+    images, videos = filter_media_by_source_context(url, images, videos)
     if VERBOSE_MEDIA_LOGS:
         logging.info("Static final media count images=%s videos=%s", len(images), len(videos))
 
@@ -970,6 +1001,7 @@ def _dynamic_scrape_on_page(page, url):
 
     images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS) or u in response_image_urls]
     videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS) or ".m3u8" in u.lower() or u in response_video_urls]
+    images, videos = filter_media_by_source_context(url, images, videos)
 
     def extract_page_number(candidate):
         m = re.search(r"hr_(\d+)", candidate)
