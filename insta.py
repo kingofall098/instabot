@@ -11,10 +11,6 @@ import telebot
 import yt_dlp
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
-try:
-    import cloudscraper
-except Exception:
-    cloudscraper = None
 
 
 logging.basicConfig(
@@ -38,8 +34,7 @@ MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 VERBOSE_MEDIA_LOGS = os.getenv("VERBOSE_MEDIA_LOGS", "1") == "1"
 TRACE_URLS = os.getenv("TRACE_URLS", "1") == "1"
-ENABLE_CLOUDSCRAPER_FALLBACK = os.getenv("ENABLE_CLOUDSCRAPER_FALLBACK", "1") == "1"
-BUILD_TAG = "newtab-only-v6-v2-click-hq"
+BUILD_TAG = "single-tab-v5-bypass"
 
 
 def handle_popups(page):
@@ -157,15 +152,11 @@ def score_url(url) :
     lower = url.lower()
     if "large" in lower or "original" in lower:
         score += 3
-    if "full" in lower:
-        score += 2
-    if "/hd-" in lower or "hd-" in lower:
-        score += 2
     if "media" in lower:
         score += 2
     if len(url) > 100:
         score += 1
-    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small", "/thumbs/"]):
+    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small"]):
         score -= 5
     if "/contents/categories/" in lower:
         score -= 12
@@ -488,32 +479,6 @@ def extract_images_from_soup(soup, base_url):
         if content:
             urls.append(urljoin(base_url, content))
 
-    # Prefer click-through image targets (often full-size) from anchors.
-    for a in soup.select("a[href]"):
-        href = a.get("href")
-        if not href:
-            continue
-        abs_href = urljoin(base_url, href)
-        lower_href = abs_href.lower()
-        has_img_child = a.find("img") is not None
-        looks_hq_target = any(k in lower_href for k in ["/original", "/full", "/sources/", "/hd-", "download"])
-        if is_http_url(abs_href) and (has_img_child or looks_hq_target):
-            if has_any_ext(lower_href, IMAGE_EXTS) or looks_hq_target:
-                urls.append(abs_href)
-
-        for attr in ["data-src", "data-original", "data-full", "data-image", "data-url", "data-href"]:
-            val = a.get(attr)
-            if not val:
-                continue
-            abs_val = urljoin(base_url, val)
-            if is_http_url(abs_val):
-                urls.append(abs_val)
-
-        onclick = a.get("onclick") or ""
-        m = re.search(r"https?://[^'\"\\s]+", onclick)
-        if m:
-            urls.append(m.group(0))
-
     cleaned = []
     for u in urls:
         if is_http_url(u) and not is_blocked_or_junk_url(u):
@@ -708,11 +673,9 @@ def extract_download_url_from_tab(tab):
     return None
 
 
-def resolve_image_url_in_new_tab(context, candidate_url, referer_url):
-    tab = None
+def resolve_image_url_in_single_tab(tab, candidate_url, referer_url):
     headers = {"User-Agent": DEFAULT_UA, "Referer": referer_url}
     try:
-        tab = context.new_page()
         response = tab.goto(candidate_url, timeout=25000, wait_until="domcontentloaded")
         tab.wait_for_timeout(250)
         handle_popups(tab)
@@ -727,7 +690,7 @@ def resolve_image_url_in_new_tab(context, candidate_url, referer_url):
         except Exception:
             nav_ct = ""
         if is_http_url(final_url) and nav_ct.startswith("image/"):
-            logging.info("Resolved image via new tab fast-path: %s -> %s", candidate_url, final_url)
+            logging.info("Resolved image via single-tab fast-path: %s -> %s", candidate_url, final_url)
             return final_url
 
         if is_http_url(final_url):
@@ -755,22 +718,16 @@ def resolve_image_url_in_new_tab(context, candidate_url, referer_url):
                 break
 
         if best:
-            logging.info("Resolved image via new tab: %s -> %s", candidate_url, best)
+            logging.info("Resolved image via single-tab: %s -> %s", candidate_url, best)
         return best
     except Exception as exc:
-        logging.warning("New-tab image resolve failed for %s: %s", candidate_url, exc)
+        logging.warning("Single-tab image resolve failed for %s: %s", candidate_url, exc)
         return None
-    finally:
-        try:
-            if tab is not None:
-                tab.close()
-        except Exception:
-            pass
 
 
 def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=0):
     logging.info(
-        "[BUILD %s] send_images started (mode=new-tab-only, requested=%s, limit=%s)",
+        "[BUILD %s] send_images started (mode=single-tab-sequential, requested=%s, limit=%s)",
         BUILD_TAG,
         len(images),
         limit,
@@ -798,6 +755,7 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
             extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
         )
         try:
+            work_page = context.new_page()
             for original_img_url in candidate_images:
                 if sent >= max_to_send:
                     break
@@ -809,7 +767,7 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
 
                 resolved_from_tab = resolved_tab_cache.get(preferred)
                 if not resolved_from_tab:
-                    resolved_from_tab = resolve_image_url_in_new_tab(context, preferred, page_url)
+                    resolved_from_tab = resolve_image_url_in_single_tab(work_page, preferred, page_url)
                     if resolved_from_tab:
                         resolved_tab_cache[preferred] = resolved_from_tab
                 if not resolved_from_tab:
@@ -823,7 +781,7 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
                     best_candidate_cache[resolved_from_tab] = img_url
                 if TRACE_URLS:
                     logging.info(
-                        "Send image via new tab candidate: original=%s preferred=%s resolved=%s selected=%s",
+                        "Send image via single-tab candidate: original=%s preferred=%s resolved=%s selected=%s",
                         original_img_url,
                         preferred,
                         resolved_from_tab,
@@ -860,11 +818,16 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
                         else:
                             bot_client.send_photo(chat_id, res.content)
                         sent += 1
-                        logging.info("Sent image via new-tab download (%s/%s)", sent, max_to_send)
+                        logging.info("Sent image via single-tab download (%s/%s)", sent, max_to_send)
                     elif VERBOSE_MEDIA_LOGS:
                         logging.info("Image download not OK: %s status=%s", img_url, res.status_code)
                 except Exception as exc:
                     logging.warning("Final image send failed: %s", exc)
+
+                try:
+                    work_page.goto("about:blank", timeout=10000, wait_until="domcontentloaded")
+                except Exception:
+                    pass
         finally:
             context.close()
             browser.close()
@@ -998,67 +961,6 @@ def static_scrape(url):
         "videos": videos,
         "blocked": False,
     }
-
-
-def cloudscraper_static_scrape(url):
-    if not ENABLE_CLOUDSCRAPER_FALLBACK:
-        return None
-    if cloudscraper is None:
-        logging.warning("cloudscraper fallback enabled but module not installed")
-        return None
-
-    headers = {
-        "User-Agent": DEFAULT_UA,
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/",
-    }
-
-    try:
-        scraper = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False}
-        )
-        res = scraper.get(url, headers=headers, timeout=25)
-
-        if res.status_code == 403:
-            logging.warning("cloudscraper returned 403 for %s", url)
-            return {"title": "Blocked", "images": [], "videos": [], "blocked": True}
-        if res.status_code >= 400:
-            logging.warning("cloudscraper non-OK status=%s for %s", res.status_code, url)
-            return {"title": "Error", "images": [], "videos": [], "blocked": False}
-
-        soup = BeautifulSoup(res.text, "html.parser")
-        title = soup.title.string.strip() if soup.title and soup.title.string else "No title"
-
-        images = extract_images_from_soup(soup, url)
-        videos = []
-        for v in soup.find_all("video"):
-            src = v.get("src")
-            if src:
-                abs_url = urljoin(url, src)
-                if is_valid_media(abs_url):
-                    videos.append(abs_url)
-
-        detail_links = collect_detail_page_links_from_soup(soup, url, max_links=30)
-        if VERBOSE_MEDIA_LOGS:
-            logging.info("cloudscraper detail links discovered=%s for %s", len(detail_links), url)
-        detail_images = crawl_detail_pages_for_images(detail_links, url, max_pages=25)
-        if detail_images:
-            images = detail_images + images
-
-        images = dedupe_keep_order(sorted(images, key=score_url, reverse=True))
-        videos = dedupe_keep_order(videos)
-        images, videos = filter_media_by_source_context(url, images, videos)
-        logging.info("cloudscraper final media count images=%s videos=%s", len(images), len(videos))
-
-        return {
-            "title": title,
-            "images": images,
-            "videos": videos,
-            "blocked": False,
-        }
-    except Exception as exc:
-        logging.warning("cloudscraper fallback failed for %s: %s", url, exc)
-        return None
 
 
 def run_page_strategy(page, strategy):
@@ -1432,15 +1334,14 @@ def dynamic_scrape(url):
     logging.info("Dynamic scrape started: %s", url)
     try:
         with sync_playwright() as p:
-            launch_options = {
-                "headless": True,
-                "args": [
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                 ],
-            }
-            browser = p.chromium.launch(**launch_options)
+            )
 
             stealth_script = """
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -1454,38 +1355,37 @@ def dynamic_scrape(url):
 
             profiles = [
                 {
-                    "name": "desktop-stealth-a",
+                    "name": "desktop-a",
+                    "warmup_url": "https://www.google.com/",
                     "kwargs": {
                         "user_agent": DEFAULT_UA,
                         "locale": "en-US",
                         "timezone_id": "America/New_York",
                         "viewport": {"width": 1366, "height": 768},
-                        "device_scale_factor": 1,
                         "extra_http_headers": {
                             "Accept-Language": "en-US,en;q=0.9",
                             "Upgrade-Insecure-Requests": "1",
                         },
                     },
-                    "warmup_url": "https://www.google.com/",
                 },
                 {
-                    "name": "desktop-stealth-b",
+                    "name": "desktop-b",
+                    "warmup_url": "https://duckduckgo.com/",
                     "kwargs": {
                         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
                         "locale": "en-US",
                         "timezone_id": "America/Chicago",
                         "viewport": {"width": 1920, "height": 1080},
-                        "device_scale_factor": 1,
                         "extra_http_headers": {
                             "Accept-Language": "en-US,en;q=0.9",
-                            "DNT": "1",
                             "Upgrade-Insecure-Requests": "1",
+                            "DNT": "1",
                         },
                     },
-                    "warmup_url": "https://duckduckgo.com/",
                 },
                 {
-                    "name": "mobile-like-stealth",
+                    "name": "mobile-like",
+                    "warmup_url": "https://www.bing.com/",
                     "kwargs": {
                         "user_agent": "Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
                         "locale": "en-US",
@@ -1499,30 +1399,28 @@ def dynamic_scrape(url):
                             "Upgrade-Insecure-Requests": "1",
                         },
                     },
-                    "warmup_url": "https://www.bing.com/",
                 },
             ]
 
             blocked_result = None
             try:
-                for attempt, profile in enumerate(profiles, start=1):
+                for idx, profile in enumerate(profiles, start=1):
                     context = None
                     try:
                         logging.info(
                             "Dynamic bypass attempt %s/%s profile=%s",
-                            attempt,
+                            idx,
                             len(profiles),
                             profile["name"],
                         )
                         context = browser.new_context(**profile["kwargs"])
                         context.add_init_script(stealth_script)
 
-                        # Warm-up navigation often helps pass basic anti-bot heuristics.
-                        warmup = profile.get("warmup_url")
-                        if warmup:
+                        warmup_url = profile.get("warmup_url")
+                        if warmup_url:
                             warm = context.new_page()
                             try:
-                                warm.goto(warmup, timeout=12000, wait_until="domcontentloaded")
+                                warm.goto(warmup_url, timeout=12000, wait_until="domcontentloaded")
                                 warm.wait_for_timeout(700)
                             except Exception:
                                 pass
@@ -1536,15 +1434,14 @@ def dynamic_scrape(url):
                         page.set_extra_http_headers(
                             {
                                 "Accept-Language": "en-US,en;q=0.9",
-                                "Referer": profile.get("warmup_url", "https://www.google.com/"),
+                                "Referer": warmup_url or "https://www.google.com/",
                             }
                         )
                         result = _dynamic_scrape_on_page(page, url)
 
                         if result and (result.get("images") or result.get("videos")):
                             logging.info(
-                                "Dynamic bypass success on attempt %s profile=%s images=%s videos=%s",
-                                attempt,
+                                "Dynamic bypass success profile=%s images=%s videos=%s",
                                 profile["name"],
                                 len(result.get("images", [])),
                                 len(result.get("videos", [])),
@@ -1553,15 +1450,9 @@ def dynamic_scrape(url):
 
                         if result and result.get("blocked"):
                             blocked_result = result
-                            logging.warning(
-                                "Dynamic bypass attempt blocked on profile=%s",
-                                profile["name"],
-                            )
+                            logging.warning("Dynamic bypass blocked on profile=%s", profile["name"])
                         else:
-                            logging.warning(
-                                "Dynamic bypass attempt produced no media on profile=%s",
-                                profile["name"],
-                            )
+                            logging.warning("Dynamic bypass no media on profile=%s", profile["name"])
                     except Exception as exc:
                         logging.warning("Dynamic bypass attempt failed (%s): %s", profile["name"], exc)
                     finally:
@@ -1616,18 +1507,8 @@ def smart_scrape(url):
             return dynamic_scrape(url)
 
         data = static_scrape(url)
-        if data.get("blocked"):
-            logging.warning("Static scrape blocked; trying cloudscraper fallback")
-            cs_data = cloudscraper_static_scrape(url)
-            if cs_data and (cs_data.get("images") or cs_data.get("videos")):
-                return cs_data
-
         if not data["images"] and not data["videos"]:
-            logging.warning("Static scrape returned no media; trying cloudscraper fallback")
-            cs_data = cloudscraper_static_scrape(url)
-            if cs_data and (cs_data.get("images") or cs_data.get("videos")):
-                return cs_data
-            logging.warning("No media from static/cloudscraper; falling back to dynamic")
+            logging.warning("Static scrape returned no media; falling back to dynamic")
             return dynamic_scrape(url)
 
         return data
@@ -1776,5 +1657,5 @@ def handle(msg):
 
 
 if __name__ == "__main__":
-    logging.info("[BUILD %s] Bot starting with new-tab-only image send enabled", BUILD_TAG)
+    logging.info("[BUILD %s] Bot starting with single-tab sequential image send enabled", BUILD_TAG)
     bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
