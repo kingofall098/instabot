@@ -1016,7 +1016,7 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
     try:
         clickable_images = page.query_selector_all("img")
         if not clickable_images:
-            return
+            return 0
 
         # Prioritize likely content images over tiny UI assets.
         def image_score(img):
@@ -1133,8 +1133,10 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
                 logging.warning("Click failed: %s", exc)
                 continue
 
+        return clicked
     except Exception as exc:
         logging.warning("Click system failed: %s", exc)
+        return 0
 
 
 def _dynamic_scrape_on_page(page, url):
@@ -1191,7 +1193,8 @@ def _dynamic_scrape_on_page(page, url):
         logging.info("Strategy: %s", strategy)
 
         run_page_strategy(page, strategy)
-        click_open_images_for_hd(page, media_urls, max_clicks=6)
+        clicked_count = click_open_images_for_hd(page, media_urls, max_clicks=10)
+        logging.info("Click extraction interacted with %s images", clicked_count)
         dom_urls = collect_dom_media(page)
         media_urls.extend(dom_urls)
         if VERBOSE_MEDIA_LOGS:
@@ -1325,16 +1328,8 @@ def smart_scrape(url):
 
         if site == "youtube":
             return scrape_youtube(url)
-
-        if is_dynamic(url):
-            return dynamic_scrape(url)
-
-        data = static_scrape(url)
-        if not data["images"] and not data["videos"]:
-            logging.warning("Static scrape returned no media; falling back to dynamic")
-            return dynamic_scrape(url)
-
-        return data
+        # Force browser-interaction path so thumbnail click/open logic always runs.
+        return dynamic_scrape(url)
     except Exception as exc:
         logging.warning("Error in smart_scrape, falling back to dynamic: %s", exc)
         return dynamic_scrape(url)
