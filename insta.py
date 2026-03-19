@@ -34,51 +34,6 @@ MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 VERBOSE_MEDIA_LOGS = os.getenv("VERBOSE_MEDIA_LOGS", "1") == "1"
 TRACE_URLS = os.getenv("TRACE_URLS", "1") == "1"
-BUILD_TAG = "single-tab-v7-proxy"
-
-HTTP_PROXY_URL = os.getenv("HTTP_PROXY", "").strip() or None
-HTTPS_PROXY_URL = os.getenv("HTTPS_PROXY", "").strip() or None
-REQUESTS_PROXIES = {}
-if HTTP_PROXY_URL:
-    REQUESTS_PROXIES["http"] = HTTP_PROXY_URL
-if HTTPS_PROXY_URL:
-    REQUESTS_PROXIES["https"] = HTTPS_PROXY_URL
-REQUESTS_PROXIES = REQUESTS_PROXIES or None
-
-
-def get_playwright_proxy_config():
-    proxy_url = HTTPS_PROXY_URL or HTTP_PROXY_URL
-    if not proxy_url:
-        return None
-    parsed = urlparse(proxy_url)
-    if not parsed.scheme or not parsed.hostname:
-        return None
-
-    server = f"{parsed.scheme}://{parsed.hostname}"
-    if parsed.port:
-        server = f"{server}:{parsed.port}"
-
-    cfg = {"server": server}
-    if parsed.username:
-        cfg["username"] = parsed.username
-    if parsed.password:
-        cfg["password"] = parsed.password
-    return cfg
-
-
-PLAYWRIGHT_PROXY = get_playwright_proxy_config()
-
-
-def http_get(url, **kwargs):
-    if REQUESTS_PROXIES and "proxies" not in kwargs:
-        kwargs["proxies"] = REQUESTS_PROXIES
-    return requests.get(url, **kwargs)
-
-
-def http_head(url, **kwargs):
-    if REQUESTS_PROXIES and "proxies" not in kwargs:
-        kwargs["proxies"] = REQUESTS_PROXIES
-    return requests.head(url, **kwargs)
 
 
 def handle_popups(page):
@@ -196,15 +151,11 @@ def score_url(url) :
     lower = url.lower()
     if "large" in lower or "original" in lower:
         score += 3
-    if "full" in lower:
-        score += 2
-    if "/hd-" in lower or "hd-" in lower:
-        score += 2
     if "media" in lower:
         score += 2
     if len(url) > 100:
         score += 1
-    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small", "/thumbs/"]):
+    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small"]):
         score -= 5
     if "/contents/categories/" in lower:
         score -= 12
@@ -285,7 +236,7 @@ def dedupe_keep_order(items):
 def probe_url(url, headers=None, timeout=8):
     info = {"url": url, "ok": False, "size": 0, "content_type": "", "status_code": 0}
     try:
-        res = http_head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        res = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
         info["status_code"] = res.status_code
         info["content_type"] = (res.headers.get("content-type") or "").lower()
         info["size"] = int(res.headers.get("content-length", 0) or 0)
@@ -331,7 +282,7 @@ def scrape_direct_media_url(url):
 
     # Fallback: try a lightweight GET for servers that do not return HEAD metadata.
     try:
-        res = http_get(url, headers=headers, timeout=10, stream=True)
+        res = requests.get(url, headers=headers, timeout=10, stream=True)
         get_ct = (res.headers.get("content-type") or "").lower()
         if get_ct.startswith("image/"):
             logging.info("Direct media GET detected image: %s (ct=%s)", url, get_ct)
@@ -527,32 +478,6 @@ def extract_images_from_soup(soup, base_url):
         if content:
             urls.append(urljoin(base_url, content))
 
-    # Capture click-through links around images (often the true full-size targets).
-    for a in soup.select("a[href]"):
-        href = a.get("href")
-        if not href:
-            continue
-        abs_href = urljoin(base_url, href)
-        lower_href = abs_href.lower()
-        has_img_child = a.find("img") is not None
-        looks_hq_target = any(k in lower_href for k in ["/original", "/full", "/sources/", "/hd-", "download"])
-        if is_http_url(abs_href) and (has_img_child or looks_hq_target):
-            if has_any_ext(lower_href, IMAGE_EXTS) or looks_hq_target:
-                urls.append(abs_href)
-
-        for attr in ["data-src", "data-original", "data-full", "data-image", "data-url", "data-href"]:
-            val = a.get(attr)
-            if not val:
-                continue
-            abs_val = urljoin(base_url, val)
-            if is_http_url(abs_val):
-                urls.append(abs_val)
-
-        onclick = a.get("onclick") or ""
-        m = re.search(r"https?://[^'\"\\s]+", onclick)
-        if m:
-            urls.append(m.group(0))
-
     cleaned = []
     for u in urls:
         if is_http_url(u) and not is_blocked_or_junk_url(u):
@@ -604,7 +529,7 @@ def crawl_detail_pages_for_images(detail_urls, referer_url, max_pages=20):
     collected = []
     for idx, detail_url in enumerate(detail_urls[:max_pages], start=1):
         try:
-            res = http_get(detail_url, headers=headers, timeout=15)
+            res = requests.get(detail_url, headers=headers, timeout=15)
             if res.status_code != 200:
                 continue
             soup = BeautifulSoup(res.text, "html.parser")
@@ -747,65 +672,7 @@ def extract_download_url_from_tab(tab):
     return None
 
 
-def resolve_image_url_in_single_tab(tab, candidate_url, referer_url):
-    headers = {"User-Agent": DEFAULT_UA, "Referer": referer_url}
-    try:
-        response = tab.goto(candidate_url, timeout=25000, wait_until="domcontentloaded")
-        tab.wait_for_timeout(250)
-        handle_popups(tab)
-        tab.wait_for_timeout(250)
-
-        discovered = []
-        final_url = tab.url
-
-        # Fast path: if new-tab navigation itself resolves to an image, use it directly.
-        try:
-            nav_ct = (response.headers.get("content-type") or "").lower() if response else ""
-        except Exception:
-            nav_ct = ""
-        if is_http_url(final_url) and nav_ct.startswith("image/"):
-            logging.info("Resolved image via single-tab fast-path: %s -> %s", candidate_url, final_url)
-            return final_url
-
-        if is_http_url(final_url):
-            discovered.append(final_url)
-
-        download_url = extract_download_url_from_tab(tab)
-        if download_url:
-            discovered.append(download_url)
-
-        dom_media = collect_dom_media(tab)
-        discovered.extend(u for u in dom_media if has_any_ext(u, IMAGE_EXTS))
-
-        discovered = dedupe_keep_order(discovered)
-        if not discovered:
-            return None
-
-        best = None
-        for u in discovered:
-            if not is_http_url(u):
-                continue
-            chosen = select_best_image_candidate(u, headers)
-            meta = probe_url(chosen, headers=headers, timeout=8)
-            if is_probe_image_ok(meta, chosen):
-                best = chosen
-                break
-
-        if best:
-            logging.info("Resolved image via single-tab: %s -> %s", candidate_url, best)
-        return best
-    except Exception as exc:
-        logging.warning("Single-tab image resolve failed for %s: %s", candidate_url, exc)
-        return None
-
-
 def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=0):
-    logging.info(
-        "[BUILD %s] send_images started (mode=single-tab-sequential, requested=%s, limit=%s)",
-        BUILD_TAG,
-        len(images),
-        limit,
-    )
     parsed = urlparse(page_url)
     domain = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
 
@@ -816,98 +683,62 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
 
     sent = 0
     max_to_send = limit if limit is not None else len(images)
-    candidate_images = dedupe_keep_order(images)
-    best_candidate_cache = {}
-    resolved_tab_cache = {}
+    candidate_images = choose_best_images_for_send(images, headers, limit=max_to_send, probe_pool=40)
 
-    with sync_playwright() as p:
-        launch_kwargs = {"headless": True}
-        if PLAYWRIGHT_PROXY:
-            launch_kwargs["proxy"] = PLAYWRIGHT_PROXY
-        browser = p.chromium.launch(**launch_kwargs)
-        context = browser.new_context(
-            user_agent=DEFAULT_UA,
-            locale="en-US",
-            viewport={"width": 1366, "height": 768},
-            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-        )
+    for original_img_url in candidate_images:
+        if sent >= max_to_send:
+            break
+
+        img_url = select_best_image_candidate(original_img_url, headers)
+        if TRACE_URLS:
+            logging.info("Send image candidate: original=%s selected=%s", original_img_url, img_url)
+
+        probe = probe_url(img_url, headers=headers, timeout=8)
+        if not is_probe_image_ok(probe, img_url):
+            if VERBOSE_MEDIA_LOGS:
+                logging.info(
+                    "Skip send non-image/bad URL: %s (status=%s ct=%s)",
+                    img_url,
+                    probe.get("status_code", 0),
+                    probe.get("content_type", ""),
+                )
+            continue
+
         try:
-            work_page = context.new_page()
-            for original_img_url in candidate_images:
-                if sent >= max_to_send:
-                    break
+            head = requests.head(img_url, timeout=7, allow_redirects=True)
+            size = int(head.headers.get("content-length", 0))
+            if min_size_kb and size and size < (min_size_kb * 1024):
+                logging.info("Skipped small image (<%sKB): %s", min_size_kb, img_url)
+                continue
+        except Exception:
+            pass
 
-                preferred = best_candidate_cache.get(original_img_url)
-                if not preferred:
-                    preferred = select_best_image_candidate(original_img_url, headers)
-                    best_candidate_cache[original_img_url] = preferred
+        try:
+            if send_as_document:
+                bot_client.send_document(chat_id, img_url)
+            else:
+                bot_client.send_photo(chat_id, img_url)
+            sent += 1
+            logging.info("Sent image via URL (%s/%s)", sent, max_to_send)
+            continue
+        except Exception as exc:
+            logging.warning("Direct photo send failed, downloading: %s", exc)
 
-                resolved_from_tab = resolved_tab_cache.get(preferred)
-                if not resolved_from_tab:
-                    resolved_from_tab = resolve_image_url_in_single_tab(work_page, preferred, page_url)
-                    if resolved_from_tab:
-                        resolved_tab_cache[preferred] = resolved_from_tab
-                if not resolved_from_tab:
-                    if VERBOSE_MEDIA_LOGS:
-                        logging.info("Skipping image: no resolvable URL from new tab for %s", preferred)
-                    continue
-
-                img_url = best_candidate_cache.get(resolved_from_tab)
-                if not img_url:
-                    img_url = select_best_image_candidate(resolved_from_tab, headers)
-                    best_candidate_cache[resolved_from_tab] = img_url
-                if TRACE_URLS:
-                    logging.info(
-                        "Send image via single-tab candidate: original=%s preferred=%s resolved=%s selected=%s",
-                        original_img_url,
-                        preferred,
-                        resolved_from_tab,
-                        img_url,
-                    )
-
-                probe = probe_url(img_url, headers=headers, timeout=8)
-                if not is_probe_image_ok(probe, img_url):
-                    if VERBOSE_MEDIA_LOGS:
-                        logging.info(
-                            "Skip send non-image/bad URL: %s (status=%s ct=%s)",
-                            img_url,
-                            probe.get("status_code", 0),
-                            probe.get("content_type", ""),
-                        )
-                    continue
-
-                try:
-                    head = http_head(img_url, timeout=7, allow_redirects=True)
-                    size = int(head.headers.get("content-length", 0))
-                    if min_size_kb and size and size < (min_size_kb * 1024):
-                        logging.info("Skipped small image (<%sKB): %s", min_size_kb, img_url)
-                        continue
-                except Exception:
-                    pass
-
-                try:
-                    res = http_get(img_url, headers=headers, timeout=20)
-                    if res.status_code == 200:
-                        if send_as_document:
-                            file_obj = io.BytesIO(res.content)
-                            file_obj.name = "image.jpg"
-                            bot_client.send_document(chat_id, file_obj)
-                        else:
-                            bot_client.send_photo(chat_id, res.content)
-                        sent += 1
-                        logging.info("Sent image via single-tab download (%s/%s)", sent, max_to_send)
-                    elif VERBOSE_MEDIA_LOGS:
-                        logging.info("Image download not OK: %s status=%s", img_url, res.status_code)
-                except Exception as exc:
-                    logging.warning("Final image send failed: %s", exc)
-
-                try:
-                    work_page.goto("about:blank", timeout=10000, wait_until="domcontentloaded")
-                except Exception:
-                    pass
-        finally:
-            context.close()
-            browser.close()
+        try:
+            res = requests.get(img_url, headers=headers, timeout=15)
+            if res.status_code == 200:
+                if send_as_document:
+                    file_obj = io.BytesIO(res.content)
+                    file_obj.name = "image.jpg"
+                    bot_client.send_document(chat_id, file_obj)
+                else:
+                    bot_client.send_photo(chat_id, res.content)
+                sent += 1
+                logging.info("Sent image via download (%s/%s)", sent, max_to_send)
+            elif VERBOSE_MEDIA_LOGS:
+                logging.info("Image download not OK: %s status=%s", img_url, res.status_code)
+        except Exception as exc:
+            logging.warning("Final image send failed: %s", exc)
 
     return sent
 
@@ -939,7 +770,7 @@ def send_videos(bot_client, chat_id, videos, page_url, limit=2):
                     sent += 1
                     continue
 
-            res = http_get(vid_url, headers=headers, timeout=15, stream=True)
+            res = requests.get(vid_url, headers=headers, timeout=15, stream=True)
             if res.status_code == 200:
                 bot_client.send_video(chat_id, vid_url)
                 sent += 1
@@ -989,7 +820,7 @@ def static_scrape(url):
         "Referer": "https://www.google.com/",
     }
 
-    res = http_get(url, headers=headers, timeout=20)
+    res = requests.get(url, headers=headers, timeout=20)
     if res.status_code == 403:
         logging.warning("403 detected (blocked)")
         return {"title": "Blocked", "images": [], "videos": [], "blocked": True}
@@ -1411,142 +1242,18 @@ def dynamic_scrape(url):
     logging.info("Dynamic scrape started: %s", url)
     try:
         with sync_playwright() as p:
-            launch_kwargs = {
-                "headless": True,
-                "args": [
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ],
-            }
-            if PLAYWRIGHT_PROXY:
-                launch_kwargs["proxy"] = PLAYWRIGHT_PROXY
-            browser = p.chromium.launch(**launch_kwargs)
-
-            stealth_script = """
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4] });
-                window.chrome = window.chrome || { runtime: {} };
-            """
-
-            profiles = [
-                {
-                    "name": "desktop-a",
-                    "warmup_url": "https://www.google.com/",
-                    "kwargs": {
-                        "user_agent": DEFAULT_UA,
-                        "locale": "en-US",
-                        "timezone_id": "America/New_York",
-                        "viewport": {"width": 1366, "height": 768},
-                        "extra_http_headers": {
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Upgrade-Insecure-Requests": "1",
-                        },
-                    },
-                },
-                {
-                    "name": "desktop-b",
-                    "warmup_url": "https://duckduckgo.com/",
-                    "kwargs": {
-                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                        "locale": "en-US",
-                        "timezone_id": "America/Chicago",
-                        "viewport": {"width": 1920, "height": 1080},
-                        "extra_http_headers": {
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Upgrade-Insecure-Requests": "1",
-                            "DNT": "1",
-                        },
-                    },
-                },
-                {
-                    "name": "mobile-like",
-                    "warmup_url": "https://www.bing.com/",
-                    "kwargs": {
-                        "user_agent": "Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
-                        "locale": "en-US",
-                        "timezone_id": "America/Los_Angeles",
-                        "viewport": {"width": 412, "height": 915},
-                        "device_scale_factor": 2.625,
-                        "is_mobile": True,
-                        "has_touch": True,
-                        "extra_http_headers": {
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Upgrade-Insecure-Requests": "1",
-                        },
-                    },
-                },
-            ]
-
-            blocked_result = None
-            try:
-                for idx, profile in enumerate(profiles, start=1):
-                    context = None
-                    try:
-                        logging.info(
-                            "Dynamic bypass attempt %s/%s profile=%s",
-                            idx,
-                            len(profiles),
-                            profile["name"],
-                        )
-                        context = browser.new_context(**profile["kwargs"])
-                        context.add_init_script(stealth_script)
-
-                        warmup_url = profile.get("warmup_url")
-                        if warmup_url:
-                            warm = context.new_page()
-                            try:
-                                warm.goto(warmup_url, timeout=12000, wait_until="domcontentloaded")
-                                warm.wait_for_timeout(700)
-                            except Exception:
-                                pass
-                            finally:
-                                try:
-                                    warm.close()
-                                except Exception:
-                                    pass
-
-                        page = context.new_page()
-                        page.set_extra_http_headers(
-                            {
-                                "Accept-Language": "en-US,en;q=0.9",
-                                "Referer": warmup_url or "https://www.google.com/",
-                            }
-                        )
-                        result = _dynamic_scrape_on_page(page, url)
-
-                        if result and (result.get("images") or result.get("videos")):
-                            logging.info(
-                                "Dynamic bypass success profile=%s images=%s videos=%s",
-                                profile["name"],
-                                len(result.get("images", [])),
-                                len(result.get("videos", [])),
-                            )
-                            return result
-
-                        if result and result.get("blocked"):
-                            blocked_result = result
-                            logging.warning("Dynamic bypass blocked on profile=%s", profile["name"])
-                        else:
-                            logging.warning("Dynamic bypass no media on profile=%s", profile["name"])
-                    except Exception as exc:
-                        logging.warning("Dynamic bypass attempt failed (%s): %s", profile["name"], exc)
-                    finally:
-                        try:
-                            if context is not None:
-                                context.close()
-                        except Exception:
-                            pass
-            finally:
-                browser.close()
-
-            if blocked_result:
-                return blocked_result
-            return {"title": "No media found", "images": [], "videos": [], "blocked": False}
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=DEFAULT_UA,
+                locale="en-US",
+                viewport={"width": 1366, "height": 768},
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            )
+            page = context.new_page()
+            result = _dynamic_scrape_on_page(page, url)
+            context.close()
+            browser.close()
+            return result
     except Exception as exc:
         logging.error("Dynamic wrapper error: %s", exc, exc_info=True)
         return {"title": "Error", "images": [], "videos": []}
@@ -1602,10 +1309,7 @@ def scrape_chapter(base_url, bot_client, chat_id, max_pages=50):
     seen = set()
 
     with sync_playwright() as p:
-        launch_kwargs = {"headless": True}
-        if PLAYWRIGHT_PROXY:
-            launch_kwargs["proxy"] = PLAYWRIGHT_PROXY
-        browser = p.chromium.launch(**launch_kwargs)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent=DEFAULT_UA,
             locale="en-US",
@@ -1740,11 +1444,4 @@ def handle(msg):
 
 
 if __name__ == "__main__":
-    logging.info("[BUILD %s] Bot starting with single-tab sequential image send enabled", BUILD_TAG)
-    logging.info(
-        "Proxy config: requests_http=%s requests_https=%s playwright_proxy=%s",
-        bool(HTTP_PROXY_URL),
-        bool(HTTPS_PROXY_URL),
-        bool(PLAYWRIGHT_PROXY),
-    )
     bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
