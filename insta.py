@@ -22,7 +22,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v15-video-compress-fallback"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v16-video-split-parts"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -35,7 +35,7 @@ MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
 MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "200"))
 TELEGRAM_MAX_UPLOAD_MB = int(os.getenv("TELEGRAM_MAX_UPLOAD_MB", "49"))
 VIDEO_FILE_ID_CACHE_PATH = os.getenv("VIDEO_FILE_ID_CACHE_PATH", "video_file_ids.json")
-ENABLE_FFMPEG_FALLBACK = os.getenv("ENABLE_FFMPEG_FALLBACK", "1") == "1"
+ENABLE_FFMPEG_SPLIT_FALLBACK = os.getenv("ENABLE_FFMPEG_SPLIT_FALLBACK", "1") == "1"
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -67,64 +67,78 @@ def ffmpeg_available():
     return shutil.which("ffmpeg") is not None
 
 
-def compress_video_bytes_to_limit(video_bytes: bytes, target_mb: int):
-    if not ENABLE_FFMPEG_FALLBACK:
+def split_video_bytes_to_parts(video_bytes: bytes, target_mb: int):
+    if not ENABLE_FFMPEG_SPLIT_FALLBACK:
         return None
     if not ffmpeg_available():
-        logging.warning("ffmpeg not available; compression fallback disabled")
+        logging.warning("ffmpeg not available; split fallback disabled")
         return None
 
     max_bytes = target_mb * 1024 * 1024
     in_fd, in_path = tempfile.mkstemp(suffix=".mp4")
-    out_fd, out_path = tempfile.mkstemp(suffix="_compressed.mp4")
+    out_dir = tempfile.mkdtemp(prefix="video_parts_")
+    out_pattern = os.path.join(out_dir, "part_%03d.mp4")
     os.close(in_fd)
-    os.close(out_fd)
     try:
         with open(in_path, "wb") as f:
             f.write(video_bytes)
 
+        # Split into small time segments; then keep parts under max size.
         cmd = [
             "ffmpeg",
             "-y",
             "-i",
             in_path,
-            "-vf",
-            "scale='min(1280,iw)':-2",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "30",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "96k",
-            "-movflags",
-            "+faststart",
-            "-fs",
-            str(max_bytes),
-            out_path,
+            "-c",
+            "copy",
+            "-map",
+            "0",
+            "-f",
+            "segment",
+            "-segment_time",
+            "60",
+            out_pattern,
         ]
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if proc.returncode != 0:
-            logging.warning("ffmpeg compression failed")
+            logging.warning("ffmpeg split failed")
             return None
-        if not os.path.exists(out_path):
+
+        part_paths = sorted(
+            os.path.join(out_dir, n)
+            for n in os.listdir(out_dir)
+            if n.startswith("part_") and n.endswith(".mp4")
+        )
+        if not part_paths:
             return None
-        out_size = os.path.getsize(out_path)
-        if out_size <= 0 or out_size > max_bytes:
-            return None
-        with open(out_path, "rb") as f:
-            return f.read()
+
+        parts = []
+        for p in part_paths:
+            try:
+                size = os.path.getsize(p)
+                if size <= 0:
+                    continue
+                if size > max_bytes:
+                    logging.warning("Split part still too large (%s MB): %s", round(size / (1024 * 1024), 2), p)
+                    continue
+                parts.append(p)
+            except Exception:
+                continue
+        return parts if parts else None
     except Exception as exc:
-        logging.warning("Compression fallback exception: %s", exc)
+        logging.warning("Split fallback exception: %s", exc)
         return None
     finally:
-        for p in (in_path, out_path):
+        try:
+            if os.path.exists(in_path):
+                os.remove(in_path)
+        except Exception:
+            pass
+        # Keep output parts for caller; caller will delete after sending.
+        if not locals().get("parts"):
             try:
-                if os.path.exists(p):
-                    os.remove(p)
+                if os.path.isdir(out_dir):
+                    shutil.rmtree(out_dir, ignore_errors=True)
             except Exception:
                 pass
 
@@ -892,21 +906,37 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                             logging.info("Sent large video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
                     except Exception as exc:
                         logging.warning("Large video URL send failed for %s: %s", resolved_video, exc)
-                        compressed = compress_video_bytes_to_limit(v_raw, TELEGRAM_MAX_UPLOAD_MB)
-                        if compressed:
-                            c_file = io.BytesIO(compressed)
-                            c_file.name = f"video_{vid_idx}_compressed.mp4"
+                        parts = split_video_bytes_to_parts(v_raw, TELEGRAM_MAX_UPLOAD_MB)
+                        if parts:
+                            sent_any_part = False
+                            for part_i, part_path in enumerate(parts, start=1):
+                                try:
+                                    with open(part_path, "rb") as pf:
+                                        bot.send_document(
+                                            chat_id,
+                                            pf,
+                                            caption=f"Video part {part_i}/{len(parts)}",
+                                        )
+                                    sent_any_part = True
+                                except Exception as excc:
+                                    logging.warning("Split part send failed (%s): %s", part_path, excc)
+                                finally:
+                                    try:
+                                        os.remove(part_path)
+                                    except Exception:
+                                        pass
                             try:
-                                msg = bot.send_video(chat_id, c_file)
+                                part_dir = os.path.dirname(parts[0])
+                                if os.path.isdir(part_dir):
+                                    shutil.rmtree(part_dir, ignore_errors=True)
+                            except Exception:
+                                pass
+                            if sent_any_part:
                                 sent_videos += 1
                                 sent_video_urls.add(resolved_video)
-                                if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
-                                    video_file_id_cache[resolved_video] = msg.video.file_id
-                                    cache_changed = True
-                                logging.info("Sent compressed large video for %s", resolved_video)
-                            except Exception as excc:
+                                logging.info("Sent split parts for large video: %s", resolved_video)
+                            else:
                                 failed_videos += 1
-                                logging.warning("Compressed video send failed for %s: %s", resolved_video, excc)
                                 bot.send_message(chat_id, f"Video URL (too large to upload): {resolved_video}")
                         else:
                             failed_videos += 1
@@ -938,23 +968,40 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                             logging.info("Sent video via URL fallback after file failure: %s", resolved_video)
                         except Exception as exc3:
                             logging.warning("URL fallback failed for %s: %s", resolved_video, exc3)
-                            compressed = compress_video_bytes_to_limit(v_raw, TELEGRAM_MAX_UPLOAD_MB)
-                            if compressed:
-                                c_file = io.BytesIO(compressed)
-                                c_file.name = f"video_{vid_idx}_compressed.mp4"
+                            parts = split_video_bytes_to_parts(v_raw, TELEGRAM_MAX_UPLOAD_MB)
+                            if parts:
+                                sent_any_part = False
+                                for part_i, part_path in enumerate(parts, start=1):
+                                    try:
+                                        with open(part_path, "rb") as pf:
+                                            bot.send_document(
+                                                chat_id,
+                                                pf,
+                                                caption=f"Video part {part_i}/{len(parts)}",
+                                            )
+                                        sent_any_part = True
+                                    except Exception as exc4:
+                                        logging.warning("Split fallback part send failed (%s): %s", part_path, exc4)
+                                    finally:
+                                        try:
+                                            os.remove(part_path)
+                                        except Exception:
+                                            pass
                                 try:
-                                    msg = bot.send_video(chat_id, c_file)
+                                    part_dir = os.path.dirname(parts[0])
+                                    if os.path.isdir(part_dir):
+                                        shutil.rmtree(part_dir, ignore_errors=True)
+                                except Exception:
+                                    pass
+                                if sent_any_part:
                                     sent_videos += 1
                                     sent_video_urls.add(resolved_video)
-                                    if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
-                                        video_file_id_cache[resolved_video] = msg.video.file_id
-                                        cache_changed = True
-                                    logging.info("Sent compressed fallback video for %s", resolved_video)
-                                except Exception as exc4:
+                                    logging.info("Sent split fallback parts for %s", resolved_video)
+                                else:
                                     failed_videos += 1
-                                    logging.warning("Compressed fallback send failed for %s: %s", resolved_video, exc4)
                                     bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
                             else:
+                                failed_videos += 1
                                 bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
                         continue
                 sent_videos += 1
