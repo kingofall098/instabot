@@ -114,6 +114,47 @@ def extract_image_candidates_from_html(html: str, base_url: str):
     return urls
 
 
+def collect_dom_candidates(page):
+    urls = []
+    try:
+        dom_urls = page.eval_on_selector_all(
+            "img, a[href], source",
+            """els => {
+                const out = [];
+                for (const e of els) {
+                    const href = e.href || e.getAttribute('href');
+                    const src = e.src || e.getAttribute('src');
+                    const dsrc = e.getAttribute('data-src');
+                    const dorg = e.getAttribute('data-original');
+                    if (href) out.push(href);
+                    if (src) out.push(src);
+                    if (dsrc) out.push(dsrc);
+                    if (dorg) out.push(dorg);
+                }
+                return out;
+            }""",
+        )
+        urls.extend(urljoin(page.url, u) for u in dom_urls if u)
+    except Exception:
+        pass
+    return [u for u in dedupe_keep_order(urls) if is_http_url(u)]
+
+
+def fetch_candidates_via_requests(page_url: str):
+    headers = {
+        "User-Agent": DEFAULT_UA,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/",
+    }
+    try:
+        r = requests.get(page_url, headers=headers, timeout=25)
+        if r.status_code == 200 and r.text:
+            return extract_image_candidates_from_html(r.text, page_url)
+    except Exception:
+        pass
+    return []
+
+
 def filter_candidates_for_page(page_url: str, candidates):
     cleaned = [u for u in candidates if is_http_url(u) and looks_like_image_url(u) and not is_junk_image_url(u)]
 
@@ -213,15 +254,39 @@ def scrape_and_send_images(chat_id: int, page_url: str):
 
         try:
             page = context.new_page()
-            page.goto(page_url, timeout=35000, wait_until="domcontentloaded")
-            page.wait_for_timeout(1500)
+            response_urls = []
 
-            raw_candidates = extract_image_candidates_from_html(page.content(), page.url)
+            def on_response(resp):
+                try:
+                    ct = (resp.headers.get("content-type") or "").lower()
+                    if ct.startswith("image/") and is_http_url(resp.url):
+                        response_urls.append(resp.url)
+                except Exception:
+                    pass
+
+            page.on("response", on_response)
+            page.goto(page_url, timeout=35000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+
+            # Trigger lazy-loaded images.
+            for _ in range(4):
+                page.mouse.wheel(0, 5000)
+                page.wait_for_timeout(700)
+
+            raw_candidates = []
+            raw_candidates.extend(extract_image_candidates_from_html(page.content(), page.url))
+            raw_candidates.extend(collect_dom_candidates(page))
+            raw_candidates.extend(response_urls)
+            if not raw_candidates:
+                raw_candidates.extend(fetch_candidates_via_requests(page.url))
             candidates = filter_candidates_for_page(page.url, raw_candidates)[:MAX_IMAGES]
             total_found = len(candidates)
 
             bot.send_message(chat_id, f"Found {total_found} page images. Opening each in a new tab and downloading one by one.")
             logging.info("Image candidates filtered=%s raw=%s url=%s", total_found, len(raw_candidates), page_url)
+            if total_found == 0:
+                bot.send_message(chat_id, "No downloadable images found on this page (it may be protected or dynamically blocked).")
+                return 0, 0
 
             sent = 0
             for idx, candidate in enumerate(candidates, start=1):
