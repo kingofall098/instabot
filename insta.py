@@ -22,7 +22,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v20-xnxx-video-priority"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v21-site-family-autolearn"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -35,6 +35,7 @@ MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
 MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "200"))
 TELEGRAM_MAX_UPLOAD_MB = int(os.getenv("TELEGRAM_MAX_UPLOAD_MB", "49"))
 VIDEO_FILE_ID_CACHE_PATH = os.getenv("VIDEO_FILE_ID_CACHE_PATH", "video_file_ids.json")
+SITE_PROFILE_CACHE_PATH = os.getenv("SITE_PROFILE_CACHE_PATH", "site_profiles.json")
 ENABLE_FFMPEG_SPLIT_FALLBACK = os.getenv("ENABLE_FFMPEG_SPLIT_FALLBACK", "1") == "1"
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -61,6 +62,108 @@ def save_video_file_id_cache(cache):
             json.dump(cache, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         logging.warning("Failed to save video file_id cache: %s", exc)
+
+
+def load_site_profile_cache():
+    try:
+        if not os.path.exists(SITE_PROFILE_CACHE_PATH):
+            return {}
+        with open(SITE_PROFILE_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_site_profile_cache(cache):
+    try:
+        with open(SITE_PROFILE_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        logging.warning("Failed to save site profile cache: %s", exc)
+
+
+SITE_PROFILE_CACHE = load_site_profile_cache()
+
+
+def normalize_host(host: str):
+    h = (host or "").strip().lower()
+    if h.startswith("www."):
+        h = h[4:]
+    return h
+
+
+def detect_site_family(page_url: str, html_text: str = "", media_candidates=None):
+    media_candidates = media_candidates or []
+    parsed = urlparse(page_url)
+    host = normalize_host(parsed.netloc)
+    path = (parsed.path or "").lower()
+    lower_url = page_url.lower()
+    html_lower = (html_text or "").lower()
+    joined_candidates = " ".join(u.lower() for u in media_candidates if isinstance(u, str))
+
+    if "xvideos" in host or "xnxx" in host:
+        return "xvideos_like"
+    if "megatube" in host:
+        return "megatube_like"
+
+    # XNXX/XVideos-like pages often expose setVideoUrl* JS hooks on /video pages.
+    xvideos_like_markers = [
+        "setvideourlhigh(",
+        "setvideourllow(",
+        "setvideourlhls(",
+        "/xv-videos/",
+        "/xvideos-cdn.",
+        "/xnxx-cdn.",
+    ]
+    if "/video" in path and (
+        "setvideourlhigh(" in html_lower
+        or "setvideourllow(" in html_lower
+        or "setvideourlhls(" in html_lower
+        or any(m in html_lower for m in xvideos_like_markers)
+        or any(m in joined_candidates for m in xvideos_like_markers)
+    ):
+        return "xvideos_like"
+
+    megatube_markers = [
+        "/contents/albums_overview/",
+        "/contents/albums/sources/",
+        "/contents/videos_screenshots/",
+        "/get_file/",
+    ]
+    if any(m in lower_url for m in megatube_markers):
+        return "megatube_like"
+    if any(m in html_lower for m in megatube_markers):
+        return "megatube_like"
+    if any(m in joined_candidates for m in megatube_markers):
+        return "megatube_like"
+    return None
+
+
+def get_site_family(page_url: str, html_text: str = "", media_candidates=None):
+    host = normalize_host(urlparse(page_url).netloc)
+    if not host:
+        return None
+
+    cached = SITE_PROFILE_CACHE.get(host)
+    if cached:
+        return cached
+
+    detected = detect_site_family(page_url, html_text=html_text, media_candidates=media_candidates)
+    if detected:
+        SITE_PROFILE_CACHE[host] = detected
+        save_site_profile_cache(SITE_PROFILE_CACHE)
+        logging.info("Learned site family host=%s family=%s", host, detected)
+    return detected
+
+
+def is_site_family(page_url: str, family: str, html_text: str = "", media_candidates=None):
+    return get_site_family(page_url, html_text=html_text, media_candidates=media_candidates) == family
+
+
+def should_prioritize_video_only(page_url: str, site_family: str):
+    path = (urlparse(page_url).path or "").lower()
+    return site_family == "xvideos_like" and "/video" in path
 
 
 def ffmpeg_available():
@@ -532,7 +635,7 @@ def filter_video_candidates_for_page(page_url: str, candidates):
         cleaned.append(u)
 
     lower_page = page_url.lower()
-    if "megatube.xxx" in lower_page and "/videos/" in lower_page:
+    if is_site_family(page_url, "megatube_like", media_candidates=candidates) and "/videos/" in lower_page:
         vid = extract_megatube_video_id(page_url)
         if vid:
             token = f"/{vid}/"
@@ -571,7 +674,7 @@ def filter_candidates_for_page(page_url: str, candidates):
     cleaned = [u for u in cleaned if is_relevant_to_page(u, page_host, tokens)]
 
     lower_page = page_url.lower()
-    if "megatube.xxx" in lower_page and "/videos/" in lower_page:
+    if is_site_family(page_url, "megatube_like", media_candidates=candidates) and "/videos/" in lower_page:
         video_id = extract_megatube_video_id(page_url)
         if video_id:
             token = f"/{video_id}/"
@@ -583,7 +686,7 @@ def filter_candidates_for_page(page_url: str, candidates):
             if video_images:
                 return choose_best_variant_per_image(dedupe_keep_order(video_images))
 
-    if "megatube.xxx" in lower_page:
+    if is_site_family(page_url, "megatube_like", media_candidates=candidates):
         album_id = extract_megatube_album_id(page_url)
         if album_id:
             token = f"/{album_id}/"
@@ -821,8 +924,9 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 page.mouse.wheel(0, 5000)
                 page.wait_for_timeout(700)
 
+            page_html = page.content()
             raw_candidates = []
-            raw_candidates.extend(extract_image_candidates_from_html(page.content(), page.url))
+            raw_candidates.extend(extract_image_candidates_from_html(page_html, page.url))
             raw_candidates.extend(collect_dom_candidates(page))
             raw_candidates.extend(response_image_urls)
             if not raw_candidates:
@@ -831,7 +935,7 @@ def scrape_and_send_images(chat_id: int, page_url: str):
             total_found = len(candidates)
 
             raw_video_candidates = []
-            raw_video_candidates.extend(extract_video_candidates_from_html(page.content(), page.url))
+            raw_video_candidates.extend(extract_video_candidates_from_html(page_html, page.url))
             raw_video_candidates.extend([u for u in collect_dom_candidates(page) if looks_like_video_url(u)])
             raw_video_candidates.extend(response_video_urls)
             if not raw_video_candidates:
@@ -839,12 +943,11 @@ def scrape_and_send_images(chat_id: int, page_url: str):
             video_candidates = filter_video_candidates_for_page(page.url, raw_video_candidates)[:MAX_VIDEOS]
             total_videos = len(video_candidates)
 
-            # On xvideos video pages, avoid sending unrelated thumbnail/assets when video is available.
-            lower_page_url = page.url.lower()
-            if (
-                ("xvideos.com/video" in lower_page_url or "xnxx.com/video" in lower_page_url)
-                and total_videos > 0
-            ):
+            all_media_candidates = dedupe_keep_order(raw_candidates + raw_video_candidates)
+            site_family = get_site_family(page.url, html_text=page_html, media_candidates=all_media_candidates)
+
+            # On xvideos-like video pages, avoid sending unrelated thumbnail/assets when video is available.
+            if total_videos > 0 and should_prioritize_video_only(page.url, site_family):
                 candidates = []
                 total_found = 0
 
