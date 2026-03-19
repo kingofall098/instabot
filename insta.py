@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v6"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v7-hq"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -140,6 +140,55 @@ def choose_best_variant_per_image(urls):
         if not cur or variant_score(u) > variant_score(cur):
             best_by_key[key] = u
     return dedupe_keep_order(best_by_key.values())
+
+
+def expand_hq_variants(url: str):
+    lower = url.lower()
+    variants = [url]
+
+    # Common gallery size path upgrades: /460/... -> /1280/... /1920/...
+    m = re.search(r"/(180|240|320|460|640|720|800|960|1024)/", lower)
+    if m:
+        cur = m.group(1)
+        for target in ("1280", "1920", "2048"):
+            variants.append(re.sub(rf"/{cur}/", f"/{target}/", url, count=1))
+
+    # Token upgrades like _180x_ / _320x_ / _640x_.
+    variants.append(re.sub(r"_(180|240|320|460|640|720|800|960)x_", "_1280x_", url, flags=re.IGNORECASE))
+    variants.append(re.sub(r"_(180|240|320|460|640|720|800|960)x_", "_1920x_", url, flags=re.IGNORECASE))
+
+    # Megatube overview -> sources.
+    variants.append(expand_megatube_source_candidate(url))
+
+    return dedupe_keep_order([v for v in variants if is_http_url(v)])
+
+
+def choose_best_download_url(url: str, referer: str):
+    headers = {
+        "User-Agent": DEFAULT_UA,
+        "Referer": referer,
+    }
+    candidates = expand_hq_variants(url)
+    best_url = None
+    best_size = -1
+
+    for c in candidates:
+        try:
+            h = requests.head(c, headers=headers, timeout=15, allow_redirects=True)
+            if h.status_code >= 400:
+                continue
+            ct = (h.headers.get("content-type") or "").lower()
+            if ct and not ct.startswith("image/") and not looks_like_image_url(c):
+                continue
+            size = int(h.headers.get("content-length", "0") or 0)
+            # Prefer actual larger objects; if unknown size, keep as fallback.
+            if size > best_size:
+                best_size = size
+                best_url = c
+        except Exception:
+            continue
+
+    return best_url or url
 
 
 def apply_dominant_gallery_id_filter(urls):
@@ -419,7 +468,8 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 if not resolved:
                     continue
 
-                raw, ext = download_image_bytes(resolved, page.url)
+                best_url = choose_best_download_url(resolved, page.url)
+                raw, ext = download_image_bytes(best_url, page.url)
                 if not raw:
                     continue
 
@@ -428,7 +478,7 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 bot.send_document(chat_id, file_obj)
                 sent += 1
                 if sent <= 3 or sent % 5 == 0 or sent == total_found:
-                    logging.info("Sent image %s/%s from %s", sent, total_found, resolved)
+                    logging.info("Sent image %s/%s from %s", sent, total_found, best_url)
 
             bot.send_message(chat_id, f"Done. Sent {sent} images.")
             return sent, total_found
