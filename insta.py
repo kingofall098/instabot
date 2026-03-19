@@ -520,7 +520,57 @@ def _dynamic_scrape_on_page(page, url):
         logging.info("Strategy: %s", strategy)
 
         run_page_strategy(page, strategy)
+
+        # Step 1: collect visible media
         media_urls.extend(collect_dom_media(page))
+
+
+        # 🔥 Step 2: CLICK IMAGES FOR HD (ADD THIS)
+        clickable_images = page.query_selector_all("img")
+
+        # sort by likely quality (longer URLs = better)
+        clickable_images = sorted(
+            clickable_images,
+            key=lambda img: len((img.get_attribute("src") or "")),
+            reverse=True
+        )
+
+        for i, img in enumerate(clickable_images[:15]):
+            try:
+                src_preview = img.get_attribute("src") or ""
+
+                if not src_preview:
+                    continue
+
+                if any(x in src_preview.lower() for x in ["icon", "logo", "avatar", "thumb"]):
+                    continue
+
+                current_url = page.url
+
+                img.scroll_into_view_if_needed()
+                img.click()
+                page.wait_for_timeout(2000)
+
+                # ✅ detect if page changed
+                if page.url != current_url:
+                    full_img = page.query_selector("img")
+                else:
+                    # modal case
+                    full_img = page.query_selector("img[src*='large'], img[src*='original'], img[src]")
+
+                if full_img:
+                    src = full_img.get_attribute("src")
+                    if src and is_http_url(src):
+                        media_urls.append(src)
+                        logging.info(f"HD Image Found: {src}")
+
+                # close modal
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(1000)
+
+            except Exception as e:
+                logging.warning(f"Click failed: {e}")
+                continue
         title = page.title() or "No title"
 
     except Exception as exc:
@@ -548,7 +598,10 @@ def _dynamic_scrape_on_page(page, url):
 
     media_urls = sorted(media_urls, key=score_url, reverse=True)
 
-    images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS)]
+    def is_image_like(url):
+        return any(x in url.lower() for x in ["jpg", "jpeg", "png", "webp", "image", "img"])
+
+    images = [u for u in media_urls if is_image_like(u)]
     videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS) or ".m3u8" in u.lower()]
 
     def extract_page_number(candidate):
