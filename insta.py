@@ -34,6 +34,7 @@ MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 VERBOSE_MEDIA_LOGS = os.getenv("VERBOSE_MEDIA_LOGS", "1") == "1"
 TRACE_URLS = os.getenv("TRACE_URLS", "1") == "1"
+BUILD_TAG = "newtab-only-v3"
 
 
 def handle_popups(page):
@@ -677,13 +678,23 @@ def resolve_image_url_in_new_tab(context, candidate_url, referer_url):
     headers = {"User-Agent": DEFAULT_UA, "Referer": referer_url}
     try:
         tab = context.new_page()
-        tab.goto(candidate_url, timeout=25000, wait_until="domcontentloaded")
-        tab.wait_for_timeout(1200)
+        response = tab.goto(candidate_url, timeout=25000, wait_until="domcontentloaded")
+        tab.wait_for_timeout(250)
         handle_popups(tab)
-        tab.wait_for_timeout(600)
+        tab.wait_for_timeout(250)
 
         discovered = []
         final_url = tab.url
+
+        # Fast path: if new-tab navigation itself resolves to an image, use it directly.
+        try:
+            nav_ct = (response.headers.get("content-type") or "").lower() if response else ""
+        except Exception:
+            nav_ct = ""
+        if is_http_url(final_url) and nav_ct.startswith("image/"):
+            logging.info("Resolved image via new tab fast-path: %s -> %s", candidate_url, final_url)
+            return final_url
+
         if is_http_url(final_url):
             discovered.append(final_url)
 
@@ -723,6 +734,12 @@ def resolve_image_url_in_new_tab(context, candidate_url, referer_url):
 
 
 def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=0):
+    logging.info(
+        "[BUILD %s] send_images started (mode=new-tab-only, requested=%s, limit=%s)",
+        BUILD_TAG,
+        len(images),
+        limit,
+    )
     parsed = urlparse(page_url)
     domain = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
 
@@ -733,7 +750,9 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
 
     sent = 0
     max_to_send = limit if limit is not None else len(images)
-    candidate_images = choose_best_images_for_send(images, headers, limit=max_to_send, probe_pool=40)
+    candidate_images = dedupe_keep_order(images)
+    best_candidate_cache = {}
+    resolved_tab_cache = {}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -748,14 +767,25 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
                 if sent >= max_to_send:
                     break
 
-                preferred = select_best_image_candidate(original_img_url, headers)
-                resolved_from_tab = resolve_image_url_in_new_tab(context, preferred, page_url)
+                preferred = best_candidate_cache.get(original_img_url)
+                if not preferred:
+                    preferred = select_best_image_candidate(original_img_url, headers)
+                    best_candidate_cache[original_img_url] = preferred
+
+                resolved_from_tab = resolved_tab_cache.get(preferred)
+                if not resolved_from_tab:
+                    resolved_from_tab = resolve_image_url_in_new_tab(context, preferred, page_url)
+                    if resolved_from_tab:
+                        resolved_tab_cache[preferred] = resolved_from_tab
                 if not resolved_from_tab:
                     if VERBOSE_MEDIA_LOGS:
                         logging.info("Skipping image: no resolvable URL from new tab for %s", preferred)
                     continue
 
-                img_url = select_best_image_candidate(resolved_from_tab, headers)
+                img_url = best_candidate_cache.get(resolved_from_tab)
+                if not img_url:
+                    img_url = select_best_image_candidate(resolved_from_tab, headers)
+                    best_candidate_cache[resolved_from_tab] = img_url
                 if TRACE_URLS:
                     logging.info(
                         "Send image via new tab candidate: original=%s preferred=%s resolved=%s selected=%s",
@@ -1508,4 +1538,5 @@ def handle(msg):
 
 
 if __name__ == "__main__":
+    logging.info("[BUILD %s] Bot starting with new-tab-only image send enabled", BUILD_TAG)
     bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
