@@ -22,7 +22,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v17-video-priority"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v18-video-script-cdn"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -227,6 +227,10 @@ def is_relevant_to_page(url: str, page_host: str, tokens):
         return True
     page_base = base_domain(page_host)
     if page_base and (host == page_base or host.endswith("." + page_base)):
+        return True
+    # Allow common CDN pattern with same brand token in hostname (e.g. xvideos-cdn).
+    brand = page_base.split(".")[0] if page_base else ""
+    if brand and brand in host:
         return True
     # For off-domain CDNs, require stronger token overlap to avoid unrelated galleries.
     if tokens and sum(1 for t in tokens if t in lower_url) >= 2:
@@ -493,6 +497,18 @@ def extract_video_candidates_from_html(html: str, base_url: str):
         c = meta.get("content")
         if c:
             urls.append(urljoin(base_url, c))
+
+    # Parse inline script-embedded video URLs.
+    script_text = html.replace("\\/", "/")
+    for m in re.findall(r"https?://[^'\"\\s<>]+", script_text):
+        if looks_like_video_url(m):
+            urls.append(m)
+    # Site-specific patterns seen on pages that store direct links in JS variables.
+    for m in re.findall(r"setVideoUrl(?:High|Low|HLS)\\(['\"]([^'\"]+)['\"]\\)", script_text):
+        if m:
+            candidate = urljoin(base_url, m)
+            if looks_like_video_url(candidate):
+                urls.append(candidate)
 
     return [u for u in dedupe_keep_order(urls) if is_http_url(u)]
 
