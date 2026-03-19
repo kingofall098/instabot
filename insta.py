@@ -1102,7 +1102,7 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
         logging.warning("Click system failed: %s", exc)
 
 
-def _dynamic_scrape_on_page(page, url):
+def _dynamic_scrape_on_page(page, url, protection_wait_ms=0):
     media_urls = []
     response_image_urls = set()
     response_video_urls = set()
@@ -1142,6 +1142,10 @@ def _dynamic_scrape_on_page(page, url):
         except Exception as exc:
             logging.warning("Timeout/loading error for %s: %s", url, exc)
             return {"title": "Timeout", "images": [], "videos": []}
+
+        if protection_wait_ms and protection_wait_ms > 0:
+            logging.info("Extra pre-protection wait: %sms", protection_wait_ms)
+            page.wait_for_timeout(protection_wait_ms)
 
         if is_protection_page(page):
             logging.warning("Protection page detected for %s", url)
@@ -1244,19 +1248,164 @@ def _dynamic_scrape_on_page(page, url):
 
 def dynamic_scrape(url):
     logging.info("Dynamic scrape started: %s", url)
+
+    def env_bool(name, default=False):
+        val = os.getenv(name)
+        if val is None:
+            return default
+        return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+    def env_int(name, default):
+        try:
+            return int(os.getenv(name, default))
+        except Exception:
+            return default
+
+    def get_proxy_server():
+        return (
+            os.getenv("PLAYWRIGHT_PROXY")
+            or os.getenv("HTTPS_PROXY")
+            or os.getenv("HTTP_PROXY")
+            or ""
+        ).strip()
+
+    def make_context_kwargs(attempt_name, storage_state_path="", use_storage_state=True):
+        kwargs = {
+            "user_agent": DEFAULT_UA,
+            "locale": "en-US",
+            "viewport": {"width": 1366, "height": 768},
+            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+        }
+
+        if attempt_name == "headless-alt":
+            kwargs["viewport"] = {"width": 1600, "height": 900}
+            kwargs["extra_http_headers"] = {"Accept-Language": "en-US,en;q=0.8"}
+
+        if use_storage_state and storage_state_path:
+            if os.path.exists(storage_state_path):
+                kwargs["storage_state"] = storage_state_path
+                logging.info("Using storage_state from %s", storage_state_path)
+            else:
+                logging.info("Storage state path not found, continuing without it: %s", storage_state_path)
+
+        return kwargs
+
+    def run_dynamic_attempt(
+        playwright_obj,
+        attempt_name,
+        headless_mode,
+        storage_state_path="",
+        use_storage_state=True,
+        pre_protection_wait_ms=0,
+        proxy_server="",
+        save_storage_state=False,
+    ):
+        browser = None
+        context = None
+        try:
+            launch_kwargs = {"headless": headless_mode}
+            if proxy_server:
+                launch_kwargs["proxy"] = {"server": proxy_server}
+            logging.info(
+                "Dynamic attempt=%s headless=%s proxy=%s storage=%s",
+                attempt_name,
+                headless_mode,
+                bool(proxy_server),
+                bool(storage_state_path and use_storage_state),
+            )
+            browser = playwright_obj.chromium.launch(**launch_kwargs)
+            context_kwargs = make_context_kwargs(
+                attempt_name,
+                storage_state_path=storage_state_path,
+                use_storage_state=use_storage_state,
+            )
+            context = browser.new_context(**context_kwargs)
+            page = context.new_page()
+            result = _dynamic_scrape_on_page(page, url, protection_wait_ms=pre_protection_wait_ms)
+
+            if save_storage_state and storage_state_path:
+                try:
+                    context.storage_state(path=storage_state_path)
+                    logging.info("Saved storage_state to %s", storage_state_path)
+                except Exception as exc:
+                    logging.warning("Failed to save storage_state: %s", exc)
+
+            return result
+        except Exception as exc:
+            logging.warning("Dynamic attempt failed (%s): %s", attempt_name, exc, exc_info=True)
+            return {"title": "Error", "images": [], "videos": []}
+        finally:
+            try:
+                if context:
+                    context.close()
+            except Exception:
+                pass
+            try:
+                if browser:
+                    browser.close()
+            except Exception:
+                pass
+
+    storage_state_path = (os.getenv("PLAYWRIGHT_STORAGE_STATE") or "").strip()
+    proxy_server = get_proxy_server()
+    headful_fallback_enabled = env_bool("HEADFUL_FALLBACK_ENABLED", True)
+    headful_wait_ms = env_int("HEADFUL_PRECHECK_WAIT_MS", 18000)
+    headless_wait_ms = env_int("HEADLESS_PRECHECK_WAIT_MS", 0)
+    save_storage_state = env_bool("SAVE_PLAYWRIGHT_STORAGE_STATE", True)
+
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=DEFAULT_UA,
-                locale="en-US",
-                viewport={"width": 1366, "height": 768},
-                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            result = run_dynamic_attempt(
+                p,
+                attempt_name="headless-primary",
+                headless_mode=True,
+                storage_state_path=storage_state_path,
+                use_storage_state=True,
+                pre_protection_wait_ms=headless_wait_ms,
+                proxy_server=proxy_server,
+                save_storage_state=save_storage_state,
             )
-            page = context.new_page()
-            result = _dynamic_scrape_on_page(page, url)
-            context.close()
-            browser.close()
+
+            has_media = bool(result.get("images") or result.get("videos"))
+            blocked = bool(result.get("blocked"))
+            if has_media:
+                return result
+
+            if blocked:
+                logging.info("Blocked on headless-primary, retrying with alternate headless context profile")
+                result_alt = run_dynamic_attempt(
+                    p,
+                    attempt_name="headless-alt",
+                    headless_mode=True,
+                    storage_state_path=storage_state_path,
+                    use_storage_state=False,
+                    pre_protection_wait_ms=headless_wait_ms,
+                    proxy_server=proxy_server,
+                    save_storage_state=False,
+                )
+                if result_alt.get("images") or result_alt.get("videos"):
+                    return result_alt
+                result = result_alt
+
+            if headful_fallback_enabled and (result.get("blocked") or not has_media):
+                logging.info("Trying headful fallback attempt for %s", url)
+                result_headful = run_dynamic_attempt(
+                    p,
+                    attempt_name="headful-fallback",
+                    headless_mode=False,
+                    storage_state_path=storage_state_path,
+                    use_storage_state=True,
+                    pre_protection_wait_ms=headful_wait_ms,
+                    proxy_server=proxy_server,
+                    save_storage_state=save_storage_state,
+                )
+                if result_headful.get("images") or result_headful.get("videos"):
+                    return result_headful
+                if result_headful.get("title") == "Error":
+                    logging.info("Headful fallback failed, returning previous attempt result")
+                    return result
+                return result_headful
+
             return result
     except Exception as exc:
         logging.error("Dynamic wrapper error: %s", exc, exc_info=True)
