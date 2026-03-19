@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v5"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v6"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -103,7 +103,8 @@ def is_relevant_to_page(url: str, page_host: str, tokens):
     page_base = base_domain(page_host)
     if page_base and (host == page_base or host.endswith("." + page_base)):
         return True
-    if tokens and any(t in lower_url for t in tokens):
+    # For off-domain CDNs, require stronger token overlap to avoid unrelated galleries.
+    if tokens and sum(1 for t in tokens if t in lower_url) >= 2:
         return True
     return False
 
@@ -139,6 +140,31 @@ def choose_best_variant_per_image(urls):
         if not cur or variant_score(u) > variant_score(cur):
             best_by_key[key] = u
     return dedupe_keep_order(best_by_key.values())
+
+
+def apply_dominant_gallery_id_filter(urls):
+    """
+    Keep only URLs that belong to the dominant long numeric gallery id in path,
+    reducing related-content bleed (common on gallery pages).
+    """
+    id_counts = {}
+    url_ids = {}
+    for u in urls:
+        ids = re.findall(r"/(\d{5,10})/", u)
+        if ids:
+            url_ids[u] = ids
+            for gid in ids:
+                id_counts[gid] = id_counts.get(gid, 0) + 1
+
+    if not id_counts:
+        return urls
+
+    dominant_id, dominant_count = sorted(id_counts.items(), key=lambda x: x[1], reverse=True)[0]
+    if dominant_count < 4:
+        return urls
+
+    kept = [u for u in urls if dominant_id in (url_ids.get(u) or [])]
+    return kept or urls
 
 
 def extract_megatube_album_id(page_url: str):
@@ -263,7 +289,9 @@ def filter_candidates_for_page(page_url: str, candidates):
             if album_only:
                 return choose_best_variant_per_image(dedupe_keep_order(album_only))
 
-    return choose_best_variant_per_image(dedupe_keep_order(cleaned))
+    cleaned = choose_best_variant_per_image(dedupe_keep_order(cleaned))
+    cleaned = apply_dominant_gallery_id_filter(cleaned)
+    return dedupe_keep_order(cleaned)
 
 
 def resolve_image_in_new_tab(context, source_page_url: str, candidate_url: str):
