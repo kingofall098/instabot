@@ -1048,5 +1048,10 @@ def on_message(msg):
 
 if __name__ == "__main__":
     logging.info("[BUILD %s] Bot starting", BUILD_TAG)
+    logging.info(
+        "Runtime capabilities: ffmpeg_available=%s split_fallback_enabled=%s",
+        ffmpeg_available(),
+        ENABLE_FFMPEG_SPLIT_FALLBACK,
+    )
     bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
 
