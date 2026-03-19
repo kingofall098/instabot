@@ -280,6 +280,17 @@ def expand_image_candidates(url):
         candidates.append(re.sub(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", "/originals/", url, flags=re.IGNORECASE))
         candidates.append(re.sub(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", "/1200x/", url, flags=re.IGNORECASE))
 
+    # WordPress and similar: image-800x525.jpg -> image.jpg
+    candidates.append(
+        re.sub(
+            r"-\d{2,4}x\d{2,4}(?=\.(?:jpg|jpeg|png|webp|avif|gif)(?:\?|$))",
+            "",
+            url,
+            flags=re.IGNORECASE,
+        )
+    )
+    candidates.append(re.sub(r"-scaled(?=\.(?:jpg|jpeg|png|webp|avif|gif)(?:\?|$))", "", url, flags=re.IGNORECASE))
+
     # Remove width/height quality params that often force thumbnails.
     stripped = re.sub(r"([?&])(w|h|width|height|quality|q|resize)=[^&]+", "", url, flags=re.IGNORECASE)
     stripped = re.sub(r"\?&", "?", stripped).rstrip("?&")
@@ -287,6 +298,37 @@ def expand_image_candidates(url):
         candidates.append(stripped)
 
     return dedupe_keep_order(candidates)
+
+
+def choose_best_images_for_send(images, headers, limit, probe_pool=40):
+    pool = images[:probe_pool]
+    ranked = []
+
+    for base in pool:
+        chosen = select_best_image_candidate(base, headers)
+        meta = probe_url(chosen, headers=headers, timeout=8)
+        rank = (meta.get("size", 0), score_url(chosen))
+        ranked.append((rank, chosen, base, meta))
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    ordered = []
+    for _, chosen, base, meta in ranked:
+        ordered.append(chosen)
+        if VERBOSE_MEDIA_LOGS:
+            logging.info(
+                "Pre-send ranking: base=%s chosen=%s size=%s ct=%s",
+                base,
+                chosen,
+                meta.get("size", 0),
+                meta.get("content_type", ""),
+            )
+
+    # Include leftovers not in the probed pool, preserving existing order.
+    for img in images:
+        if img not in ordered:
+            ordered.append(img)
+
+    return dedupe_keep_order(ordered)[:limit] if limit is not None else dedupe_keep_order(ordered)
 
 
 def extract_images_from_soup(soup, base_url):
@@ -462,8 +504,9 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
 
     sent = 0
     max_to_send = limit if limit is not None else len(images)
+    candidate_images = choose_best_images_for_send(images, headers, limit=max_to_send, probe_pool=40)
 
-    for original_img_url in images:
+    for original_img_url in candidate_images:
         if sent >= max_to_send:
             break
 
@@ -612,15 +655,16 @@ def static_scrape(url):
             if is_valid_media(abs_url):
                 videos.append(abs_url)
 
-    # If only thumbnails were found, open likely detail pages and extract full-size images.
-    if len(images) < 8:
-        detail_links = collect_detail_page_links_from_soup(soup, url, max_links=20)
-        if VERBOSE_MEDIA_LOGS:
-            logging.info("Static detail links discovered=%s for %s", len(detail_links), url)
-        detail_images = crawl_detail_pages_for_images(detail_links, url, max_pages=20)
-        images.extend(detail_images)
-        if VERBOSE_MEDIA_LOGS:
-            logging.info("Static detail images added=%s", len(detail_images))
+    # Crawl likely detail pages to collect full-size images even when thumbnails exist.
+    detail_links = collect_detail_page_links_from_soup(soup, url, max_links=30)
+    if VERBOSE_MEDIA_LOGS:
+        logging.info("Static detail links discovered=%s for %s", len(detail_links), url)
+    detail_images = crawl_detail_pages_for_images(detail_links, url, max_pages=25)
+    if detail_images:
+        # Prefer detail-page images by placing them first before dedupe/sort.
+        images = detail_images + images
+    if VERBOSE_MEDIA_LOGS:
+        logging.info("Static detail images added=%s", len(detail_images))
 
     images = dedupe_keep_order(images)
     videos = dedupe_keep_order(videos)
@@ -1073,5 +1117,3 @@ def handle(msg):
 
 if __name__ == "__main__":
     bot.infinity_polling(skip_pending=True)
-
-
