@@ -34,7 +34,7 @@ MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 VERBOSE_MEDIA_LOGS = os.getenv("VERBOSE_MEDIA_LOGS", "1") == "1"
 TRACE_URLS = os.getenv("TRACE_URLS", "1") == "1"
-BUILD_TAG = "single-tab-v4"
+BUILD_TAG = "single-tab-v5-bypass"
 
 
 def handle_popups(page):
@@ -1334,18 +1334,139 @@ def dynamic_scrape(url):
     logging.info("Dynamic scrape started: %s", url)
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=DEFAULT_UA,
-                locale="en-US",
-                viewport={"width": 1366, "height": 768},
-                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                ],
             )
-            page = context.new_page()
-            result = _dynamic_scrape_on_page(page, url)
-            context.close()
-            browser.close()
-            return result
+
+            stealth_script = """
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4] });
+                window.chrome = window.chrome || { runtime: {} };
+            """
+
+            profiles = [
+                {
+                    "name": "desktop-a",
+                    "warmup_url": "https://www.google.com/",
+                    "kwargs": {
+                        "user_agent": DEFAULT_UA,
+                        "locale": "en-US",
+                        "timezone_id": "America/New_York",
+                        "viewport": {"width": 1366, "height": 768},
+                        "extra_http_headers": {
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Upgrade-Insecure-Requests": "1",
+                        },
+                    },
+                },
+                {
+                    "name": "desktop-b",
+                    "warmup_url": "https://duckduckgo.com/",
+                    "kwargs": {
+                        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                        "locale": "en-US",
+                        "timezone_id": "America/Chicago",
+                        "viewport": {"width": 1920, "height": 1080},
+                        "extra_http_headers": {
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Upgrade-Insecure-Requests": "1",
+                            "DNT": "1",
+                        },
+                    },
+                },
+                {
+                    "name": "mobile-like",
+                    "warmup_url": "https://www.bing.com/",
+                    "kwargs": {
+                        "user_agent": "Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
+                        "locale": "en-US",
+                        "timezone_id": "America/Los_Angeles",
+                        "viewport": {"width": 412, "height": 915},
+                        "device_scale_factor": 2.625,
+                        "is_mobile": True,
+                        "has_touch": True,
+                        "extra_http_headers": {
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Upgrade-Insecure-Requests": "1",
+                        },
+                    },
+                },
+            ]
+
+            blocked_result = None
+            try:
+                for idx, profile in enumerate(profiles, start=1):
+                    context = None
+                    try:
+                        logging.info(
+                            "Dynamic bypass attempt %s/%s profile=%s",
+                            idx,
+                            len(profiles),
+                            profile["name"],
+                        )
+                        context = browser.new_context(**profile["kwargs"])
+                        context.add_init_script(stealth_script)
+
+                        warmup_url = profile.get("warmup_url")
+                        if warmup_url:
+                            warm = context.new_page()
+                            try:
+                                warm.goto(warmup_url, timeout=12000, wait_until="domcontentloaded")
+                                warm.wait_for_timeout(700)
+                            except Exception:
+                                pass
+                            finally:
+                                try:
+                                    warm.close()
+                                except Exception:
+                                    pass
+
+                        page = context.new_page()
+                        page.set_extra_http_headers(
+                            {
+                                "Accept-Language": "en-US,en;q=0.9",
+                                "Referer": warmup_url or "https://www.google.com/",
+                            }
+                        )
+                        result = _dynamic_scrape_on_page(page, url)
+
+                        if result and (result.get("images") or result.get("videos")):
+                            logging.info(
+                                "Dynamic bypass success profile=%s images=%s videos=%s",
+                                profile["name"],
+                                len(result.get("images", [])),
+                                len(result.get("videos", [])),
+                            )
+                            return result
+
+                        if result and result.get("blocked"):
+                            blocked_result = result
+                            logging.warning("Dynamic bypass blocked on profile=%s", profile["name"])
+                        else:
+                            logging.warning("Dynamic bypass no media on profile=%s", profile["name"])
+                    except Exception as exc:
+                        logging.warning("Dynamic bypass attempt failed (%s): %s", profile["name"], exc)
+                    finally:
+                        try:
+                            if context is not None:
+                                context.close()
+                        except Exception:
+                            pass
+            finally:
+                browser.close()
+
+            if blocked_result:
+                return blocked_result
+            return {"title": "No media found", "images": [], "videos": [], "blocked": False}
     except Exception as exc:
         logging.error("Dynamic wrapper error: %s", exc, exc_info=True)
         return {"title": "Error", "images": [], "videos": []}
