@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v2"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v3"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -61,6 +61,65 @@ def is_junk_image_url(url: str) -> bool:
     lower = (url or "").lower()
     bad = ["logo", "icon", "sprite", "favicon", "/contents/categories/", "last_category"]
     return any(x in lower for x in bad)
+
+
+def extract_page_tokens(page_url: str):
+    parsed = urlparse(page_url)
+    tokens = []
+    for part in (parsed.path or "").lower().split("/"):
+        if not part or len(part) < 3:
+            continue
+        if part.isdigit():
+            continue
+        if part in {"porn", "tag", "picture", "page", "albums"}:
+            continue
+        tokens.append(part)
+    return dedupe_keep_order(tokens)
+
+
+def is_relevant_to_page(url: str, page_host: str, tokens):
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    lower_url = url.lower()
+
+    if host == page_host:
+        return True
+    if tokens and any(t in lower_url for t in tokens):
+        return True
+    return False
+
+
+def variant_key(url: str):
+    lower = url.lower()
+    key = re.sub(r"_[0-9]{2,4}x_", "_X_", lower)
+    key = re.sub(r"/[0-9]{2,4}x[0-9]{2,4}/", "/XxX/", key)
+    return key
+
+
+def variant_score(url: str):
+    lower = url.lower()
+    score = 0
+    m = re.search(r"_(\\d{2,4})x_", lower)
+    if m:
+        score += int(m.group(1))
+    m2 = re.search(r"/(\\d{2,4})x(\\d{2,4})/", lower)
+    if m2:
+        score += int(m2.group(1)) + int(m2.group(2))
+    if "original" in lower or "sources" in lower:
+        score += 5000
+    if "thumb" in lower or "/gthumb/" in lower:
+        score -= 500
+    return score
+
+
+def choose_best_variant_per_image(urls):
+    best_by_key = {}
+    for u in urls:
+        key = variant_key(u)
+        cur = best_by_key.get(key)
+        if not cur or variant_score(u) > variant_score(cur):
+            best_by_key[key] = u
+    return dedupe_keep_order(best_by_key.values())
 
 
 def extract_megatube_album_id(page_url: str):
@@ -157,6 +216,10 @@ def fetch_candidates_via_requests(page_url: str):
 
 def filter_candidates_for_page(page_url: str, candidates):
     cleaned = [u for u in candidates if is_http_url(u) and looks_like_image_url(u) and not is_junk_image_url(u)]
+    page_host = (urlparse(page_url).netloc or "").lower()
+    tokens = extract_page_tokens(page_url)
+
+    cleaned = [u for u in cleaned if is_relevant_to_page(u, page_host, tokens)]
 
     lower_page = page_url.lower()
     if "megatube.xxx" in lower_page:
@@ -171,9 +234,9 @@ def filter_candidates_for_page(page_url: str, candidates):
                 elif "/contents/albums/sources/" in lu and token in lu:
                     album_only.append(u)
             if album_only:
-                return dedupe_keep_order(album_only)
+                return choose_best_variant_per_image(dedupe_keep_order(album_only))
 
-    return dedupe_keep_order(cleaned)
+    return choose_best_variant_per_image(dedupe_keep_order(cleaned))
 
 
 def resolve_image_in_new_tab(context, source_page_url: str, candidate_url: str):
