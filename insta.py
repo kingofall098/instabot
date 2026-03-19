@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import os
 import re
@@ -18,7 +19,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v13-video-safe"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v14-video-fileid-cache"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -30,12 +31,32 @@ MAX_IMAGES = int(os.getenv("MAX_IMAGES", "50"))
 MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
 MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "200"))
 TELEGRAM_MAX_UPLOAD_MB = int(os.getenv("TELEGRAM_MAX_UPLOAD_MB", "49"))
+VIDEO_FILE_ID_CACHE_PATH = os.getenv("VIDEO_FILE_ID_CACHE_PATH", "video_file_ids.json")
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("Set TELEGRAM_BOT_TOKEN environment variable")
 
 bot = telebot.TeleBot(TOKEN)
+
+
+def load_video_file_id_cache():
+    try:
+        if not os.path.exists(VIDEO_FILE_ID_CACHE_PATH):
+            return {}
+        with open(VIDEO_FILE_ID_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_video_file_id_cache(cache):
+    try:
+        with open(VIDEO_FILE_ID_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        logging.warning("Failed to save video file_id cache: %s", exc)
 
 
 def is_http_url(url: str) -> bool:
@@ -735,6 +756,8 @@ def scrape_and_send_images(chat_id: int, page_url: str):
             sent_videos = 0
             sent_video_urls = set()
             failed_videos = 0
+            video_file_id_cache = load_video_file_id_cache()
+            cache_changed = False
             for vid_idx, v_candidate in enumerate(video_candidates, start=1):
                 resolved_video = resolve_video_in_new_tab(context, page.url, v_candidate)
                 if not resolved_video:
@@ -744,13 +767,28 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 if resolved_video in sent_video_urls:
                     continue
 
+                cached_file_id = video_file_id_cache.get(resolved_video)
+                if cached_file_id:
+                    try:
+                        bot.send_video(chat_id, cached_file_id)
+                        sent_videos += 1
+                        sent_video_urls.add(resolved_video)
+                        if sent_videos <= 2 or sent_videos == total_videos:
+                            logging.info("Sent video %s/%s via cached file_id for %s", sent_videos, total_videos, resolved_video)
+                        continue
+                    except Exception as exc:
+                        logging.warning("Cached file_id send failed for %s: %s", resolved_video, exc)
+
                 v_raw, v_ext = download_video_bytes(resolved_video, page.url, max_mb=MAX_VIDEO_MB)
                 if not v_raw:
                     # fallback: try remote URL send
                     try:
-                        bot.send_video(chat_id, resolved_video)
+                        msg = bot.send_video(chat_id, resolved_video)
                         sent_videos += 1
                         sent_video_urls.add(resolved_video)
+                        if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
+                            video_file_id_cache[resolved_video] = msg.video.file_id
+                            cache_changed = True
                         if sent_videos <= 2 or sent_videos == total_videos:
                             logging.info("Sent video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
                     except Exception as exc:
@@ -774,9 +812,12 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                         resolved_video,
                     )
                     try:
-                        bot.send_video(chat_id, resolved_video)
+                        msg = bot.send_video(chat_id, resolved_video)
                         sent_videos += 1
                         sent_video_urls.add(resolved_video)
+                        if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
+                            video_file_id_cache[resolved_video] = msg.video.file_id
+                            cache_changed = True
                         if sent_videos <= 2 or sent_videos == total_videos:
                             logging.info("Sent large video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
                     except Exception as exc:
@@ -788,7 +829,10 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 v_file = io.BytesIO(v_raw)
                 v_file.name = f"video_{vid_idx}{v_ext}"
                 try:
-                    bot.send_video(chat_id, v_file)
+                    msg = bot.send_video(chat_id, v_file)
+                    if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
+                        video_file_id_cache[resolved_video] = msg.video.file_id
+                        cache_changed = True
                 except Exception as exc:
                     logging.warning("send_video file failed for %s: %s", resolved_video, exc)
                     try:
@@ -798,9 +842,12 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                         failed_videos += 1
                         logging.warning("send_document file failed for %s: %s", resolved_video, exc2)
                         try:
-                            bot.send_video(chat_id, resolved_video)
+                            msg = bot.send_video(chat_id, resolved_video)
                             sent_videos += 1
                             sent_video_urls.add(resolved_video)
+                            if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
+                                video_file_id_cache[resolved_video] = msg.video.file_id
+                                cache_changed = True
                             logging.info("Sent video via URL fallback after file failure: %s", resolved_video)
                         except Exception as exc3:
                             logging.warning("URL fallback failed for %s: %s", resolved_video, exc3)
@@ -811,6 +858,8 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 if sent_videos <= 2 or sent_videos == total_videos:
                     logging.info("Sent video %s/%s from %s", sent_videos, total_videos, resolved_video)
 
+            if cache_changed:
+                save_video_file_id_cache(video_file_id_cache)
             bot.send_message(chat_id, f"Done. Sent {sent} images and {sent_videos} videos. Failed videos: {failed_videos}.")
             return sent, sent_videos
         finally:
@@ -849,3 +898,4 @@ def on_message(msg):
 if __name__ == "__main__":
     logging.info("[BUILD %s] Bot starting", BUILD_TAG)
     bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
+
