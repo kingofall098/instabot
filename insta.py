@@ -672,6 +672,56 @@ def extract_download_url_from_tab(tab):
     return None
 
 
+def resolve_image_url_in_new_tab(context, candidate_url, referer_url):
+    tab = None
+    headers = {"User-Agent": DEFAULT_UA, "Referer": referer_url}
+    try:
+        tab = context.new_page()
+        tab.goto(candidate_url, timeout=25000, wait_until="domcontentloaded")
+        tab.wait_for_timeout(1200)
+        handle_popups(tab)
+        tab.wait_for_timeout(600)
+
+        discovered = []
+        final_url = tab.url
+        if is_http_url(final_url):
+            discovered.append(final_url)
+
+        download_url = extract_download_url_from_tab(tab)
+        if download_url:
+            discovered.append(download_url)
+
+        dom_media = collect_dom_media(tab)
+        discovered.extend(u for u in dom_media if has_any_ext(u, IMAGE_EXTS))
+
+        discovered = dedupe_keep_order(discovered)
+        if not discovered:
+            return None
+
+        best = None
+        for u in discovered:
+            if not is_http_url(u):
+                continue
+            chosen = select_best_image_candidate(u, headers)
+            meta = probe_url(chosen, headers=headers, timeout=8)
+            if is_probe_image_ok(meta, chosen):
+                best = chosen
+                break
+
+        if best:
+            logging.info("Resolved image via new tab: %s -> %s", candidate_url, best)
+        return best
+    except Exception as exc:
+        logging.warning("New-tab image resolve failed for %s: %s", candidate_url, exc)
+        return None
+    finally:
+        try:
+            if tab is not None:
+                tab.close()
+        except Exception:
+            pass
+
+
 def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_document=True, min_size_kb=0):
     parsed = urlparse(page_url)
     domain = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
@@ -685,60 +735,74 @@ def send_images(bot_client, chat_id, images, page_url, limit=10, send_as_documen
     max_to_send = limit if limit is not None else len(images)
     candidate_images = choose_best_images_for_send(images, headers, limit=max_to_send, probe_pool=40)
 
-    for original_img_url in candidate_images:
-        if sent >= max_to_send:
-            break
-
-        img_url = select_best_image_candidate(original_img_url, headers)
-        if TRACE_URLS:
-            logging.info("Send image candidate: original=%s selected=%s", original_img_url, img_url)
-
-        probe = probe_url(img_url, headers=headers, timeout=8)
-        if not is_probe_image_ok(probe, img_url):
-            if VERBOSE_MEDIA_LOGS:
-                logging.info(
-                    "Skip send non-image/bad URL: %s (status=%s ct=%s)",
-                    img_url,
-                    probe.get("status_code", 0),
-                    probe.get("content_type", ""),
-                )
-            continue
-
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=DEFAULT_UA,
+            locale="en-US",
+            viewport={"width": 1366, "height": 768},
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
         try:
-            head = requests.head(img_url, timeout=7, allow_redirects=True)
-            size = int(head.headers.get("content-length", 0))
-            if min_size_kb and size and size < (min_size_kb * 1024):
-                logging.info("Skipped small image (<%sKB): %s", min_size_kb, img_url)
-                continue
-        except Exception:
-            pass
+            for original_img_url in candidate_images:
+                if sent >= max_to_send:
+                    break
 
-        try:
-            if send_as_document:
-                bot_client.send_document(chat_id, img_url)
-            else:
-                bot_client.send_photo(chat_id, img_url)
-            sent += 1
-            logging.info("Sent image via URL (%s/%s)", sent, max_to_send)
-            continue
-        except Exception as exc:
-            logging.warning("Direct photo send failed, downloading: %s", exc)
+                preferred = select_best_image_candidate(original_img_url, headers)
+                resolved_from_tab = resolve_image_url_in_new_tab(context, preferred, page_url)
+                if not resolved_from_tab:
+                    if VERBOSE_MEDIA_LOGS:
+                        logging.info("Skipping image: no resolvable URL from new tab for %s", preferred)
+                    continue
 
-        try:
-            res = requests.get(img_url, headers=headers, timeout=15)
-            if res.status_code == 200:
-                if send_as_document:
-                    file_obj = io.BytesIO(res.content)
-                    file_obj.name = "image.jpg"
-                    bot_client.send_document(chat_id, file_obj)
-                else:
-                    bot_client.send_photo(chat_id, res.content)
-                sent += 1
-                logging.info("Sent image via download (%s/%s)", sent, max_to_send)
-            elif VERBOSE_MEDIA_LOGS:
-                logging.info("Image download not OK: %s status=%s", img_url, res.status_code)
-        except Exception as exc:
-            logging.warning("Final image send failed: %s", exc)
+                img_url = select_best_image_candidate(resolved_from_tab, headers)
+                if TRACE_URLS:
+                    logging.info(
+                        "Send image via new tab candidate: original=%s preferred=%s resolved=%s selected=%s",
+                        original_img_url,
+                        preferred,
+                        resolved_from_tab,
+                        img_url,
+                    )
+
+                probe = probe_url(img_url, headers=headers, timeout=8)
+                if not is_probe_image_ok(probe, img_url):
+                    if VERBOSE_MEDIA_LOGS:
+                        logging.info(
+                            "Skip send non-image/bad URL: %s (status=%s ct=%s)",
+                            img_url,
+                            probe.get("status_code", 0),
+                            probe.get("content_type", ""),
+                        )
+                    continue
+
+                try:
+                    head = requests.head(img_url, timeout=7, allow_redirects=True)
+                    size = int(head.headers.get("content-length", 0))
+                    if min_size_kb and size and size < (min_size_kb * 1024):
+                        logging.info("Skipped small image (<%sKB): %s", min_size_kb, img_url)
+                        continue
+                except Exception:
+                    pass
+
+                try:
+                    res = requests.get(img_url, headers=headers, timeout=20)
+                    if res.status_code == 200:
+                        if send_as_document:
+                            file_obj = io.BytesIO(res.content)
+                            file_obj.name = "image.jpg"
+                            bot_client.send_document(chat_id, file_obj)
+                        else:
+                            bot_client.send_photo(chat_id, res.content)
+                        sent += 1
+                        logging.info("Sent image via new-tab download (%s/%s)", sent, max_to_send)
+                    elif VERBOSE_MEDIA_LOGS:
+                        logging.info("Image download not OK: %s status=%s", img_url, res.status_code)
+                except Exception as exc:
+                    logging.warning("Final image send failed: %s", exc)
+        finally:
+            context.close()
+            browser.close()
 
     return sent
 
@@ -979,7 +1043,7 @@ def collect_dom_media(page):
 
 def click_open_images_for_hd(page, media_urls, max_clicks=6):
     try:
-        clickable_images = page.query_selector_all("a img")
+        clickable_images = page.query_selector_all("img")
         if not clickable_images:
             return
 
@@ -1055,7 +1119,7 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
                     continue
 
                 # Same-tab navigation case
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(1200)
                 if page.url != current_url:
                     clicked += 1
                     logging.info("[CLICK] Same-tab navigation for image %s -> %s", i, page.url)
@@ -1102,7 +1166,7 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
         logging.warning("Click system failed: %s", exc)
 
 
-def _dynamic_scrape_on_page(page, url, protection_wait_ms=0):
+def _dynamic_scrape_on_page(page, url):
     media_urls = []
     response_image_urls = set()
     response_video_urls = set()
@@ -1143,10 +1207,6 @@ def _dynamic_scrape_on_page(page, url, protection_wait_ms=0):
             logging.warning("Timeout/loading error for %s: %s", url, exc)
             return {"title": "Timeout", "images": [], "videos": []}
 
-        if protection_wait_ms and protection_wait_ms > 0:
-            logging.info("Extra pre-protection wait: %sms", protection_wait_ms)
-            page.wait_for_timeout(protection_wait_ms)
-
         if is_protection_page(page):
             logging.warning("Protection page detected for %s", url)
             return {"title": "Blocked by site protection", "images": [], "videos": [], "blocked": True}
@@ -1160,15 +1220,11 @@ def _dynamic_scrape_on_page(page, url, protection_wait_ms=0):
         logging.info("Strategy: %s", strategy)
 
         run_page_strategy(page, strategy)
-        logging.info("FORCE CLICK MODE ENABLED")
-        click_open_images_for_hd(page, media_urls, max_clicks=12)
-        media_urls = dedupe_keep_order(media_urls)
-        media_urls = [
-            u for u in media_urls
-            if any(x in u.lower() for x in ["large", "orig", "full", "hd", "source", "download"])
-        ]
+        click_open_images_for_hd(page, media_urls, max_clicks=6)
+        dom_urls = collect_dom_media(page)
+        media_urls.extend(dom_urls)
         if VERBOSE_MEDIA_LOGS:
-            logging.info("After forced-click extraction count=%s", len(media_urls))
+            logging.info("After DOM extraction count=%s", len(media_urls))
         detail_links = collect_detail_page_links_from_dom(page, max_links=20)
         if VERBOSE_MEDIA_LOGS:
             logging.info("Detail links discovered (dom)=%s", len(detail_links))
@@ -1248,164 +1304,19 @@ def _dynamic_scrape_on_page(page, url, protection_wait_ms=0):
 
 def dynamic_scrape(url):
     logging.info("Dynamic scrape started: %s", url)
-
-    def env_bool(name, default=False):
-        val = os.getenv(name)
-        if val is None:
-            return default
-        return str(val).strip().lower() in {"1", "true", "yes", "on"}
-
-    def env_int(name, default):
-        try:
-            return int(os.getenv(name, default))
-        except Exception:
-            return default
-
-    def get_proxy_server():
-        return (
-            os.getenv("PLAYWRIGHT_PROXY")
-            or os.getenv("HTTPS_PROXY")
-            or os.getenv("HTTP_PROXY")
-            or ""
-        ).strip()
-
-    def make_context_kwargs(attempt_name, storage_state_path="", use_storage_state=True):
-        kwargs = {
-            "user_agent": DEFAULT_UA,
-            "locale": "en-US",
-            "viewport": {"width": 1366, "height": 768},
-            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-        }
-
-        if attempt_name == "headless-alt":
-            kwargs["viewport"] = {"width": 1600, "height": 900}
-            kwargs["extra_http_headers"] = {"Accept-Language": "en-US,en;q=0.8"}
-
-        if use_storage_state and storage_state_path:
-            if os.path.exists(storage_state_path):
-                kwargs["storage_state"] = storage_state_path
-                logging.info("Using storage_state from %s", storage_state_path)
-            else:
-                logging.info("Storage state path not found, continuing without it: %s", storage_state_path)
-
-        return kwargs
-
-    def run_dynamic_attempt(
-        playwright_obj,
-        attempt_name,
-        headless_mode,
-        storage_state_path="",
-        use_storage_state=True,
-        pre_protection_wait_ms=0,
-        proxy_server="",
-        save_storage_state=False,
-    ):
-        browser = None
-        context = None
-        try:
-            launch_kwargs = {"headless": headless_mode}
-            if proxy_server:
-                launch_kwargs["proxy"] = {"server": proxy_server}
-            logging.info(
-                "Dynamic attempt=%s headless=%s proxy=%s storage=%s",
-                attempt_name,
-                headless_mode,
-                bool(proxy_server),
-                bool(storage_state_path and use_storage_state),
-            )
-            browser = playwright_obj.chromium.launch(**launch_kwargs)
-            context_kwargs = make_context_kwargs(
-                attempt_name,
-                storage_state_path=storage_state_path,
-                use_storage_state=use_storage_state,
-            )
-            context = browser.new_context(**context_kwargs)
-            page = context.new_page()
-            result = _dynamic_scrape_on_page(page, url, protection_wait_ms=pre_protection_wait_ms)
-
-            if save_storage_state and storage_state_path:
-                try:
-                    context.storage_state(path=storage_state_path)
-                    logging.info("Saved storage_state to %s", storage_state_path)
-                except Exception as exc:
-                    logging.warning("Failed to save storage_state: %s", exc)
-
-            return result
-        except Exception as exc:
-            logging.warning("Dynamic attempt failed (%s): %s", attempt_name, exc, exc_info=True)
-            return {"title": "Error", "images": [], "videos": []}
-        finally:
-            try:
-                if context:
-                    context.close()
-            except Exception:
-                pass
-            try:
-                if browser:
-                    browser.close()
-            except Exception:
-                pass
-
-    storage_state_path = (os.getenv("PLAYWRIGHT_STORAGE_STATE") or "").strip()
-    proxy_server = get_proxy_server()
-    headful_fallback_enabled = env_bool("HEADFUL_FALLBACK_ENABLED", True)
-    headful_wait_ms = env_int("HEADFUL_PRECHECK_WAIT_MS", 18000)
-    headless_wait_ms = env_int("HEADLESS_PRECHECK_WAIT_MS", 0)
-    save_storage_state = env_bool("SAVE_PLAYWRIGHT_STORAGE_STATE", True)
-
     try:
         with sync_playwright() as p:
-            result = run_dynamic_attempt(
-                p,
-                attempt_name="headless-primary",
-                headless_mode=True,
-                storage_state_path=storage_state_path,
-                use_storage_state=True,
-                pre_protection_wait_ms=headless_wait_ms,
-                proxy_server=proxy_server,
-                save_storage_state=save_storage_state,
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=DEFAULT_UA,
+                locale="en-US",
+                viewport={"width": 1366, "height": 768},
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
             )
-
-            has_media = bool(result.get("images") or result.get("videos"))
-            blocked = bool(result.get("blocked"))
-            if has_media:
-                return result
-
-            if blocked:
-                logging.info("Blocked on headless-primary, retrying with alternate headless context profile")
-                result_alt = run_dynamic_attempt(
-                    p,
-                    attempt_name="headless-alt",
-                    headless_mode=True,
-                    storage_state_path=storage_state_path,
-                    use_storage_state=False,
-                    pre_protection_wait_ms=headless_wait_ms,
-                    proxy_server=proxy_server,
-                    save_storage_state=False,
-                )
-                if result_alt.get("images") or result_alt.get("videos"):
-                    return result_alt
-                result = result_alt
-
-            if headful_fallback_enabled and (result.get("blocked") or not has_media):
-                logging.info("Trying headful fallback attempt for %s", url)
-                result_headful = run_dynamic_attempt(
-                    p,
-                    attempt_name="headful-fallback",
-                    headless_mode=False,
-                    storage_state_path=storage_state_path,
-                    use_storage_state=True,
-                    pre_protection_wait_ms=headful_wait_ms,
-                    proxy_server=proxy_server,
-                    save_storage_state=save_storage_state,
-                )
-                if result_headful.get("images") or result_headful.get("videos"):
-                    return result_headful
-                if result_headful.get("title") == "Error":
-                    logging.info("Headful fallback failed, returning previous attempt result")
-                    return result
-                return result_headful
-
+            page = context.new_page()
+            result = _dynamic_scrape_on_page(page, url)
+            context.close()
+            browser.close()
             return result
     except Exception as exc:
         logging.error("Dynamic wrapper error: %s", exc, exc_info=True)
