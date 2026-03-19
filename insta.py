@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v3"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v4"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -73,8 +73,18 @@ def extract_page_tokens(page_url: str):
             continue
         if part in {"porn", "tag", "picture", "page", "albums"}:
             continue
-        tokens.append(part)
+        for token in re.split(r"[^a-z0-9]+", part):
+            if len(token) >= 3 and not token.isdigit():
+                tokens.append(token)
     return dedupe_keep_order(tokens)
+
+
+def base_domain(host: str):
+    host = (host or "").lower().strip(".")
+    parts = host.split(".")
+    if len(parts) >= 2:
+        return ".".join(parts[-2:])
+    return host
 
 
 def is_relevant_to_page(url: str, page_host: str, tokens):
@@ -83,6 +93,9 @@ def is_relevant_to_page(url: str, page_host: str, tokens):
     lower_url = url.lower()
 
     if host == page_host:
+        return True
+    page_base = base_domain(page_host)
+    if page_base and (host == page_base or host.endswith("." + page_base)):
         return True
     if tokens and any(t in lower_url for t in tokens):
         return True
@@ -365,7 +378,8 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 file_obj.name = f"image_{idx}{ext}"
                 bot.send_document(chat_id, file_obj)
                 sent += 1
-                logging.info("Sent image %s/%s from %s", sent, total_found, resolved)
+                if sent <= 3 or sent % 5 == 0 or sent == total_found:
+                    logging.info("Sent image %s/%s from %s", sent, total_found, resolved)
 
             bot.send_message(chat_id, f"Done. Sent {sent} images.")
             return sent, total_found
