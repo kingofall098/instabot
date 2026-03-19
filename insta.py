@@ -452,6 +452,41 @@ def filter_media_by_source_context(source_url, images, videos):
     return images, videos
 
 
+def filter_relevant_images(source_url, images):
+    source_host = (urlparse(source_url).netloc or "").lower()
+    if not source_host:
+        return images
+
+    def domain_match(target_host):
+        target_host = (target_host or "").lower()
+        return target_host == source_host or target_host.endswith("." + source_host)
+
+    allowed_extra = (
+        "uuu.cam",
+        "st.megatube.xxx",
+        "mt-static.com",
+    )
+
+    kept = []
+    for img in images:
+        host = (urlparse(img).netloc or "").lower()
+        if domain_match(host):
+            kept.append(img)
+            continue
+        if any(host == d or host.endswith("." + d) for d in allowed_extra):
+            kept.append(img)
+            continue
+
+    if VERBOSE_MEDIA_LOGS:
+        logging.info(
+            "Relevant image filter: source=%s kept=%s dropped=%s",
+            source_host,
+            len(kept),
+            max(0, len(images) - len(kept)),
+        )
+    return kept or images
+
+
 def extract_images_from_soup(soup, base_url):
     urls = []
     img_attrs = ["src", "data-src", "data-original", "data-full", "data-zoom-image", "data-large-file"]
@@ -859,6 +894,7 @@ def static_scrape(url):
     videos = dedupe_keep_order(videos)
     images = sorted(images, key=score_url, reverse=True)
     images, videos = filter_media_by_source_context(url, images, videos)
+    images = filter_relevant_images(url, images)
     if VERBOSE_MEDIA_LOGS:
         logging.info("Static final media count images=%s videos=%s", len(images), len(videos))
 
@@ -1218,6 +1254,7 @@ def _dynamic_scrape_on_page(page, url):
     images = [u for u in media_urls if has_any_ext(u, IMAGE_EXTS) or u in response_image_urls]
     videos = [u for u in media_urls if has_any_ext(u, VIDEO_EXTS) or ".m3u8" in u.lower() or u in response_video_urls]
     images, videos = filter_media_by_source_context(url, images, videos)
+    images = filter_relevant_images(url, images)
 
     def extract_page_number(candidate):
         m = re.search(r"hr_(\d+)", candidate)
