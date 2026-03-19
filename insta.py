@@ -144,7 +144,7 @@ def get_base_url(url):
     return match.group(1) if match else None
 
 
-def score_url(url):
+def score_url(url) :
     score = 0
     lower = url.lower()
     if "large" in lower or "original" in lower:
@@ -334,6 +334,15 @@ def expand_image_candidates(url):
     if sized_path:
         candidates.append(re.sub(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", "/originals/", url, flags=re.IGNORECASE))
         candidates.append(re.sub(r"/\d{2,4}x\d{2,4}(?:_[a-z]+)?/", "/1200x/", url, flags=re.IGNORECASE))
+    # Megatube: overview thumbs -> source full image
+    candidates.append(
+        re.sub(
+            r"/contents/albums_overview/(\d+)/(\d+)/(?:\d+x\d+|originals|1200x)/(\d+)\.(jpg|jpeg|png|webp|avif|gif)",
+            r"/contents/albums/sources/\1/\2/\3.\4",
+            url,
+            flags=re.IGNORECASE,
+        )
+    )
 
     # WordPress and similar: image-800x525.jpg -> image.jpg
     candidates.append(
