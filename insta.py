@@ -959,19 +959,11 @@ def collect_dom_media(page):
 
 def click_open_images_for_hd(page, media_urls, max_clicks=6):
     try:
-        clickable_images = page.query_selector_all("img")
+        clickable_images = page.query_selector_all("a img")
         if not clickable_images:
+            logging.info("No clickable images found")
             return
 
-        # Prioritize likely content images over tiny UI assets.
-        def image_score(img):
-            src = (img.get_attribute("src") or img.get_attribute("data-src") or "").lower()
-            score = len(src)
-            if any(x in src for x in ["thumb", "icon", "logo", "avatar", "sprite"]):
-                score -= 1000
-            return score
-
-        clickable_images = sorted(clickable_images, key=image_score, reverse=True)[: max_clicks * 3]
         clicked = 0
 
         for i, img in enumerate(clickable_images):
@@ -979,108 +971,73 @@ def click_open_images_for_hd(page, media_urls, max_clicks=6):
                 break
 
             try:
-                src_preview = img.get_attribute("src") or img.get_attribute("data-src") or ""
-                if not src_preview:
+                src = img.get_attribute("src") or ""
+                if not src:
                     continue
-                low = src_preview.lower()
-                if any(x in low for x in ["icon", "logo", "avatar", "thumb", "sprite"]):
+
+                if any(x in src.lower() for x in ["icon", "logo", "avatar", "sprite", "thumb"]):
                     continue
+
+                link = img.evaluate_handle("el => el.closest('a')")
+                if not link:
+                    continue
+
+                logging.info(f"[CLICK-FIX] Clicking image {i}: {src}")
 
                 current_url = page.url
-                logging.info("[CLICK] Trying image %s src=%s", i, src_preview)
-
-                parent_link = None
-                try:
-                    parent_link = img.evaluate_handle("el => el.closest('a')")
-                except Exception:
-                    parent_link = None
 
                 new_page = None
                 try:
                     with page.context.expect_page(timeout=2500) as new_page_info:
-                        img.scroll_into_view_if_needed()
-                        if parent_link:
-                            parent_link.click()
-                        else:
-                            img.click()
+                        link.click()
                     new_page = new_page_info.value
-                except Exception:
+                except:
                     new_page = None
 
-                if new_page is not None:
+                # ✅ NEW TAB CASE
+                if new_page:
                     clicked += 1
-                    logging.info("[CLICK] New tab opened for image %s", i)
-                    try:
-                        new_page.wait_for_load_state("domcontentloaded", timeout=12000)
-                    except Exception:
-                        pass
-                    handle_popups(new_page)
-                    new_page.wait_for_timeout(1000)
+                    logging.info("✅ New tab opened")
 
-                    dl = extract_download_url_from_tab(new_page)
-                    if dl:
-                        media_urls.append(dl)
-                        logging.info("[HD-DOWNLOAD-BTN] %s", dl)
+                    new_page.wait_for_load_state("domcontentloaded", timeout=10000)
 
                     tab_media = collect_dom_media(new_page)
                     media_urls.extend(tab_media)
-                    if TRACE_URLS and tab_media:
-                        for j, u in enumerate(tab_media[:10], start=1):
-                            logging.info("[HD-NEWTAB-%s] %s", j, u)
 
-                    try:
-                        new_page.close()
-                    except Exception:
-                        pass
+                    new_page.close()
                     continue
 
-                # Same-tab navigation case
+                # ✅ SAME TAB CASE
                 page.wait_for_timeout(1200)
+
                 if page.url != current_url:
                     clicked += 1
-                    logging.info("[CLICK] Same-tab navigation for image %s -> %s", i, page.url)
-
-                    dl = extract_download_url_from_tab(page)
-                    if dl:
-                        media_urls.append(dl)
-                        logging.info("[HD-DOWNLOAD-BTN] %s", dl)
+                    logging.info("✅ Same tab navigation")
 
                     nav_media = collect_dom_media(page)
                     media_urls.extend(nav_media)
-                    if TRACE_URLS and nav_media:
-                        for j, u in enumerate(nav_media[:10], start=1):
-                            logging.info("[HD-NAV-%s] %s", j, u)
 
-                    try:
-                        page.go_back(timeout=12000)
-                        page.wait_for_timeout(800)
-                    except Exception:
-                        pass
+                    page.go_back()
+                    page.wait_for_timeout(800)
                     continue
 
-                # Modal/lightbox case
+                # ✅ MODAL CASE
                 modal_media = collect_dom_media(page)
                 if modal_media:
                     clicked += 1
+                    logging.info("✅ Modal detected")
+
                     media_urls.extend(modal_media)
-                    logging.info("[CLICK] Modal/media capture for image %s count=%s", i, len(modal_media))
-                    if TRACE_URLS:
-                        for j, u in enumerate(modal_media[:10], start=1):
-                            logging.info("[HD-MODAL-%s] %s", j, u)
 
-                try:
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(600)
-                except Exception:
-                    pass
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(500)
 
-            except Exception as exc:
-                logging.warning("Click failed: %s", exc)
+            except Exception as e:
+                logging.warning(f"Click failed: {e}")
                 continue
 
-    except Exception as exc:
-        logging.warning("Click system failed: %s", exc)
-
+    except Exception as e:
+        logging.warning(f"Click system failed: {e}")
 
 def _dynamic_scrape_on_page(page, url):
     media_urls = []
