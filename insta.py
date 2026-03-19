@@ -39,7 +39,7 @@ DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 VERBOSE_MEDIA_LOGS = os.getenv("VERBOSE_MEDIA_LOGS", "1") == "1"
 TRACE_URLS = os.getenv("TRACE_URLS", "1") == "1"
 ENABLE_CLOUDSCRAPER_FALLBACK = os.getenv("ENABLE_CLOUDSCRAPER_FALLBACK", "1") == "1"
-BUILD_TAG = "newtab-only-v5-v2-cloudscraper"
+BUILD_TAG = "newtab-only-v6-v2-click-hq"
 
 
 def handle_popups(page):
@@ -157,11 +157,15 @@ def score_url(url) :
     lower = url.lower()
     if "large" in lower or "original" in lower:
         score += 3
+    if "full" in lower:
+        score += 2
+    if "/hd-" in lower or "hd-" in lower:
+        score += 2
     if "media" in lower:
         score += 2
     if len(url) > 100:
         score += 1
-    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small"]):
+    if any(k in lower for k in ["75x75", "150x", "236x", "320x", "474x", "thumb", "preview", "small", "/thumbs/"]):
         score -= 5
     if "/contents/categories/" in lower:
         score -= 12
@@ -483,6 +487,32 @@ def extract_images_from_soup(soup, base_url):
         content = meta.get("content")
         if content:
             urls.append(urljoin(base_url, content))
+
+    # Prefer click-through image targets (often full-size) from anchors.
+    for a in soup.select("a[href]"):
+        href = a.get("href")
+        if not href:
+            continue
+        abs_href = urljoin(base_url, href)
+        lower_href = abs_href.lower()
+        has_img_child = a.find("img") is not None
+        looks_hq_target = any(k in lower_href for k in ["/original", "/full", "/sources/", "/hd-", "download"])
+        if is_http_url(abs_href) and (has_img_child or looks_hq_target):
+            if has_any_ext(lower_href, IMAGE_EXTS) or looks_hq_target:
+                urls.append(abs_href)
+
+        for attr in ["data-src", "data-original", "data-full", "data-image", "data-url", "data-href"]:
+            val = a.get(attr)
+            if not val:
+                continue
+            abs_val = urljoin(base_url, val)
+            if is_http_url(abs_val):
+                urls.append(abs_val)
+
+        onclick = a.get("onclick") or ""
+        m = re.search(r"https?://[^'\"\\s]+", onclick)
+        if m:
+            urls.append(m.group(0))
 
     cleaned = []
     for u in urls:
