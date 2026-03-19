@@ -18,7 +18,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v12-video-fallbacks"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v13-video-safe"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -29,6 +29,7 @@ VIDEO_EXTS = (".mp4", ".webm", ".m4v", ".mov")
 MAX_IMAGES = int(os.getenv("MAX_IMAGES", "50"))
 MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
 MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "200"))
+TELEGRAM_MAX_UPLOAD_MB = int(os.getenv("TELEGRAM_MAX_UPLOAD_MB", "49"))
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -765,13 +766,46 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                             bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
                     continue
 
+                if len(v_raw) > TELEGRAM_MAX_UPLOAD_MB * 1024 * 1024:
+                    logging.warning(
+                        "Video too large for Telegram upload (%s MB > %s MB): %s",
+                        round(len(v_raw) / (1024 * 1024), 2),
+                        TELEGRAM_MAX_UPLOAD_MB,
+                        resolved_video,
+                    )
+                    try:
+                        bot.send_video(chat_id, resolved_video)
+                        sent_videos += 1
+                        sent_video_urls.add(resolved_video)
+                        if sent_videos <= 2 or sent_videos == total_videos:
+                            logging.info("Sent large video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
+                    except Exception as exc:
+                        failed_videos += 1
+                        logging.warning("Large video URL send failed for %s: %s", resolved_video, exc)
+                        bot.send_message(chat_id, f"Video URL (too large to upload): {resolved_video}")
+                    continue
+
                 v_file = io.BytesIO(v_raw)
                 v_file.name = f"video_{vid_idx}{v_ext}"
                 try:
                     bot.send_video(chat_id, v_file)
                 except Exception as exc:
                     logging.warning("send_video file failed for %s: %s", resolved_video, exc)
-                    bot.send_document(chat_id, v_file)
+                    try:
+                        v_file.seek(0)
+                        bot.send_document(chat_id, v_file)
+                    except Exception as exc2:
+                        failed_videos += 1
+                        logging.warning("send_document file failed for %s: %s", resolved_video, exc2)
+                        try:
+                            bot.send_video(chat_id, resolved_video)
+                            sent_videos += 1
+                            sent_video_urls.add(resolved_video)
+                            logging.info("Sent video via URL fallback after file failure: %s", resolved_video)
+                        except Exception as exc3:
+                            logging.warning("URL fallback failed for %s: %s", resolved_video, exc3)
+                            bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
+                        continue
                 sent_videos += 1
                 sent_video_urls.add(resolved_video)
                 if sent_videos <= 2 or sent_videos == total_videos:
