@@ -171,6 +171,11 @@ def has_any_ext(url, exts):
     return any(ext in lower for ext in exts)
 
 
+def looks_like_direct_media_url(url):
+    lower = (url or "").lower()
+    return has_any_ext(lower, MEDIA_EXTS) or ".m3u8" in lower
+
+
 def is_http_url(url):
     if not url:
         return False
@@ -233,6 +238,40 @@ def probe_url(url, headers=None, timeout=8):
         return info
     except Exception:
         return info
+
+
+def scrape_direct_media_url(url):
+    headers = {
+        "User-Agent": DEFAULT_UA,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": url,
+    }
+
+    info = probe_url(url, headers=headers, timeout=10)
+    content_type = (info.get("content_type") or "").lower()
+
+    if content_type.startswith("image/") or has_any_ext(url, IMAGE_EXTS):
+        logging.info("Direct media URL detected as image: %s (ct=%s)", url, content_type)
+        return {"title": "Direct Image", "images": [url], "videos": [], "blocked": False}
+
+    if content_type.startswith("video/") or ".m3u8" in url.lower() or has_any_ext(url, VIDEO_EXTS):
+        logging.info("Direct media URL detected as video: %s (ct=%s)", url, content_type)
+        return {"title": "Direct Video", "images": [], "videos": [url], "blocked": False}
+
+    # Fallback: try a lightweight GET for servers that do not return HEAD metadata.
+    try:
+        res = requests.get(url, headers=headers, timeout=10, stream=True)
+        get_ct = (res.headers.get("content-type") or "").lower()
+        if get_ct.startswith("image/"):
+            logging.info("Direct media GET detected image: %s (ct=%s)", url, get_ct)
+            return {"title": "Direct Image", "images": [url], "videos": [], "blocked": False}
+        if get_ct.startswith("video/") or "application/vnd.apple.mpegurl" in get_ct:
+            logging.info("Direct media GET detected video: %s (ct=%s)", url, get_ct)
+            return {"title": "Direct Video", "images": [], "videos": [url], "blocked": False}
+    except Exception as exc:
+        logging.warning("Direct media probe GET failed for %s: %s", url, exc)
+
+    return None
 
 
 def select_best_image_candidate(img_url, headers):
@@ -959,6 +998,11 @@ def smart_scrape(url):
     logging.info("Detected site: %s", site)
 
     try:
+        if looks_like_direct_media_url(url):
+            direct = scrape_direct_media_url(url)
+            if direct:
+                return direct
+
         if site == "youtube":
             return scrape_youtube(url)
 
