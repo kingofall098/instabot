@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 import telebot
+import yt_dlp
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
@@ -22,7 +23,7 @@ logging.basicConfig(
     ],
 )
 
-BUILD_TAG = "v2-rewrite-newtab-sequential-v21-site-family-autolearn"
+BUILD_TAG = "v2-rewrite-newtab-sequential-v20-xnxx-video-priority"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -35,7 +36,6 @@ MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "10"))
 MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "200"))
 TELEGRAM_MAX_UPLOAD_MB = int(os.getenv("TELEGRAM_MAX_UPLOAD_MB", "49"))
 VIDEO_FILE_ID_CACHE_PATH = os.getenv("VIDEO_FILE_ID_CACHE_PATH", "video_file_ids.json")
-SITE_PROFILE_CACHE_PATH = os.getenv("SITE_PROFILE_CACHE_PATH", "site_profiles.json")
 ENABLE_FFMPEG_SPLIT_FALLBACK = os.getenv("ENABLE_FFMPEG_SPLIT_FALLBACK", "1") == "1"
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -64,106 +64,20 @@ def save_video_file_id_cache(cache):
         logging.warning("Failed to save video file_id cache: %s", exc)
 
 
-def load_site_profile_cache():
-    try:
-        if not os.path.exists(SITE_PROFILE_CACHE_PATH):
-            return {}
-        with open(SITE_PROFILE_CACHE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_site_profile_cache(cache):
-    try:
-        with open(SITE_PROFILE_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-    except Exception as exc:
-        logging.warning("Failed to save site profile cache: %s", exc)
-
-
-SITE_PROFILE_CACHE = load_site_profile_cache()
-
-
-def normalize_host(host: str):
-    h = (host or "").strip().lower()
-    if h.startswith("www."):
-        h = h[4:]
-    return h
-
-
-def detect_site_family(page_url: str, html_text: str = "", media_candidates=None):
-    media_candidates = media_candidates or []
+def canonical_page_key(page_url: str):
     parsed = urlparse(page_url)
-    host = normalize_host(parsed.netloc)
-    path = (parsed.path or "").lower()
-    lower_url = page_url.lower()
-    html_lower = (html_text or "").lower()
-    joined_candidates = " ".join(u.lower() for u in media_candidates if isinstance(u, str))
-
-    if "xvideos" in host or "xnxx" in host:
-        return "xvideos_like"
-    if "megatube" in host:
-        return "megatube_like"
-
-    # XNXX/XVideos-like pages often expose setVideoUrl* JS hooks on /video pages.
-    xvideos_like_markers = [
-        "setvideourlhigh(",
-        "setvideourllow(",
-        "setvideourlhls(",
-        "/xv-videos/",
-        "/xvideos-cdn.",
-        "/xnxx-cdn.",
-    ]
-    if "/video" in path and (
-        "setvideourlhigh(" in html_lower
-        or "setvideourllow(" in html_lower
-        or "setvideourlhls(" in html_lower
-        or any(m in html_lower for m in xvideos_like_markers)
-        or any(m in joined_candidates for m in xvideos_like_markers)
-    ):
-        return "xvideos_like"
-
-    megatube_markers = [
-        "/contents/albums_overview/",
-        "/contents/albums/sources/",
-        "/contents/videos_screenshots/",
-        "/get_file/",
-    ]
-    if any(m in lower_url for m in megatube_markers):
-        return "megatube_like"
-    if any(m in html_lower for m in megatube_markers):
-        return "megatube_like"
-    if any(m in joined_candidates for m in megatube_markers):
-        return "megatube_like"
-    return None
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
 
 
-def get_site_family(page_url: str, html_text: str = "", media_candidates=None):
-    host = normalize_host(urlparse(page_url).netloc)
-    if not host:
-        return None
+def build_video_cache_key(page_url: str, resolved_video_url: str):
+    # Prefer stable page key for video page URLs.
+    lower_page = page_url.lower()
+    if any(x in lower_page for x in ["/videos/", "xvideos.com/video", "xnxx.com/video"]):
+        return canonical_page_key(page_url)
 
-    cached = SITE_PROFILE_CACHE.get(host)
-    if cached:
-        return cached
-
-    detected = detect_site_family(page_url, html_text=html_text, media_candidates=media_candidates)
-    if detected:
-        SITE_PROFILE_CACHE[host] = detected
-        save_site_profile_cache(SITE_PROFILE_CACHE)
-        logging.info("Learned site family host=%s family=%s", host, detected)
-    return detected
-
-
-def is_site_family(page_url: str, family: str, html_text: str = "", media_candidates=None):
-    return get_site_family(page_url, html_text=html_text, media_candidates=media_candidates) == family
-
-
-def should_prioritize_video_only(page_url: str, site_family: str):
-    path = (urlparse(page_url).path or "").lower()
-    return site_family == "xvideos_like" and "/video" in path
+    # Fallback: strip query/hash from media URL.
+    p = urlparse(resolved_video_url)
+    return f"{p.scheme}://{p.netloc}{p.path}"
 
 
 def ffmpeg_available():
@@ -635,7 +549,7 @@ def filter_video_candidates_for_page(page_url: str, candidates):
         cleaned.append(u)
 
     lower_page = page_url.lower()
-    if is_site_family(page_url, "megatube_like", media_candidates=candidates) and "/videos/" in lower_page:
+    if "megatube.xxx" in lower_page and "/videos/" in lower_page:
         vid = extract_megatube_video_id(page_url)
         if vid:
             token = f"/{vid}/"
@@ -674,7 +588,7 @@ def filter_candidates_for_page(page_url: str, candidates):
     cleaned = [u for u in cleaned if is_relevant_to_page(u, page_host, tokens)]
 
     lower_page = page_url.lower()
-    if is_site_family(page_url, "megatube_like", media_candidates=candidates) and "/videos/" in lower_page:
+    if "megatube.xxx" in lower_page and "/videos/" in lower_page:
         video_id = extract_megatube_video_id(page_url)
         if video_id:
             token = f"/{video_id}/"
@@ -686,7 +600,7 @@ def filter_candidates_for_page(page_url: str, candidates):
             if video_images:
                 return choose_best_variant_per_image(dedupe_keep_order(video_images))
 
-    if is_site_family(page_url, "megatube_like", media_candidates=candidates):
+    if "megatube.xxx" in lower_page:
         album_id = extract_megatube_album_id(page_url)
         if album_id:
             token = f"/{album_id}/"
@@ -890,6 +804,32 @@ def download_video_bytes(url: str, referer: str, max_mb: int = 40):
         return None, None
 
 
+def extract_video_with_ytdlp(page_url):
+    try:
+        ydl_opts = {
+            "quiet": True,
+            "format": "best",
+            "noplaylist": True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(page_url, download=False)
+
+            # direct stream
+            if isinstance(info, dict) and "url" in info and info["url"]:
+                return info["url"]
+
+            # fallback formats
+            if isinstance(info, dict) and "formats" in info:
+                for f in reversed(info["formats"]):
+                    if isinstance(f, dict) and f.get("url"):
+                        return f["url"]
+    except Exception as e:
+        logging.warning(f"yt-dlp failed: {e}")
+
+    return None
+
+
 def scrape_and_send_images(chat_id: int, page_url: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -924,9 +864,8 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                 page.mouse.wheel(0, 5000)
                 page.wait_for_timeout(700)
 
-            page_html = page.content()
             raw_candidates = []
-            raw_candidates.extend(extract_image_candidates_from_html(page_html, page.url))
+            raw_candidates.extend(extract_image_candidates_from_html(page.content(), page.url))
             raw_candidates.extend(collect_dom_candidates(page))
             raw_candidates.extend(response_image_urls)
             if not raw_candidates:
@@ -935,7 +874,7 @@ def scrape_and_send_images(chat_id: int, page_url: str):
             total_found = len(candidates)
 
             raw_video_candidates = []
-            raw_video_candidates.extend(extract_video_candidates_from_html(page_html, page.url))
+            raw_video_candidates.extend(extract_video_candidates_from_html(page.content(), page.url))
             raw_video_candidates.extend([u for u in collect_dom_candidates(page) if looks_like_video_url(u)])
             raw_video_candidates.extend(response_video_urls)
             if not raw_video_candidates:
@@ -943,11 +882,12 @@ def scrape_and_send_images(chat_id: int, page_url: str):
             video_candidates = filter_video_candidates_for_page(page.url, raw_video_candidates)[:MAX_VIDEOS]
             total_videos = len(video_candidates)
 
-            all_media_candidates = dedupe_keep_order(raw_candidates + raw_video_candidates)
-            site_family = get_site_family(page.url, html_text=page_html, media_candidates=all_media_candidates)
-
-            # On xvideos-like video pages, avoid sending unrelated thumbnail/assets when video is available.
-            if total_videos > 0 and should_prioritize_video_only(page.url, site_family):
+            # On xvideos video pages, avoid sending unrelated thumbnail/assets when video is available.
+            lower_page_url = page.url.lower()
+            if (
+                ("xvideos.com/video" in lower_page_url or "xnxx.com/video" in lower_page_url)
+                and total_videos > 0
+            ):
                 candidates = []
                 total_found = 0
 
@@ -1015,29 +955,49 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                     except Exception as exc:
                         logging.warning("Cached file_id send failed for %s: %s", resolved_video, exc)
 
-                v_raw, v_ext = download_video_bytes(resolved_video, page.url, max_mb=MAX_VIDEO_MB)
-                if not v_raw:
-                    # fallback: try remote URL send
+                # URL-first strategy: this is fastest and avoids unnecessary downloads.
+                try:
+                    msg = bot.send_video(chat_id, resolved_video)
+                    sent_videos += 1
+                    sent_video_urls.add(resolved_video)
+                    if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
+                        video_file_id_cache[resolved_video] = msg.video.file_id
+                        cache_changed = True
+                    if sent_videos <= 2 or sent_videos == total_videos:
+                        logging.info("Sent video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
+                    continue
+                except Exception as exc:
+                    logging.warning("Direct URL send failed for %s: %s", resolved_video, exc)
+
+                # yt-dlp fallback for protected/obfuscated video pages.
+                ytdlp_url = extract_video_with_ytdlp(page.url)
+                if ytdlp_url:
                     try:
-                        msg = bot.send_video(chat_id, resolved_video)
+                        msg = bot.send_video(chat_id, ytdlp_url)
                         sent_videos += 1
                         sent_video_urls.add(resolved_video)
+                        sent_video_urls.add(ytdlp_url)
                         if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
-                            video_file_id_cache[resolved_video] = msg.video.file_id
+                            video_file_id_cache[ytdlp_url] = msg.video.file_id
                             cache_changed = True
                         if sent_videos <= 2 or sent_videos == total_videos:
-                            logging.info("Sent video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
+                            logging.info("Sent video %s/%s via yt-dlp URL from %s", sent_videos, total_videos, ytdlp_url)
+                        continue
                     except Exception as exc:
-                        logging.warning("send_video URL failed for %s: %s", resolved_video, exc)
-                        try:
-                            bot.send_document(chat_id, resolved_video)
-                            sent_videos += 1
-                            sent_video_urls.add(resolved_video)
-                            logging.info("Sent video as document URL from %s", resolved_video)
-                        except Exception as exc2:
-                            failed_videos += 1
-                            logging.warning("send_document URL failed for %s: %s", resolved_video, exc2)
-                            bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
+                        logging.warning("yt-dlp URL send failed for page %s: %s", page.url, exc)
+
+                v_raw, v_ext = download_video_bytes(resolved_video, page.url, max_mb=MAX_VIDEO_MB)
+                if not v_raw:
+                    try:
+                        bot.send_document(chat_id, resolved_video)
+                        sent_videos += 1
+                        sent_video_urls.add(resolved_video)
+                        if sent_videos <= 2 or sent_videos == total_videos:
+                            logging.info("Sent video %s/%s as document URL from %s", sent_videos, total_videos, resolved_video)
+                    except Exception as exc:
+                        failed_videos += 1
+                        logging.warning("send_document URL failed for %s: %s", resolved_video, exc)
+                        bot.send_message(chat_id, f"Video URL (could not auto-send): {resolved_video}")
                     continue
 
                 if len(v_raw) > TELEGRAM_MAX_UPLOAD_MB * 1024 * 1024:
@@ -1047,52 +1007,41 @@ def scrape_and_send_images(chat_id: int, page_url: str):
                         TELEGRAM_MAX_UPLOAD_MB,
                         resolved_video,
                     )
-                    try:
-                        msg = bot.send_video(chat_id, resolved_video)
-                        sent_videos += 1
-                        sent_video_urls.add(resolved_video)
-                        if getattr(msg, "video", None) and getattr(msg.video, "file_id", None):
-                            video_file_id_cache[resolved_video] = msg.video.file_id
-                            cache_changed = True
-                        if sent_videos <= 2 or sent_videos == total_videos:
-                            logging.info("Sent large video %s/%s via URL from %s", sent_videos, total_videos, resolved_video)
-                    except Exception as exc:
-                        logging.warning("Large video URL send failed for %s: %s", resolved_video, exc)
-                        parts = split_video_bytes_to_parts(v_raw, TELEGRAM_MAX_UPLOAD_MB)
-                        if parts:
-                            sent_any_part = False
-                            for part_i, part_path in enumerate(parts, start=1):
-                                try:
-                                    with open(part_path, "rb") as pf:
-                                        bot.send_document(
-                                            chat_id,
-                                            pf,
-                                            caption=f"Video part {part_i}/{len(parts)}",
-                                        )
-                                    sent_any_part = True
-                                except Exception as excc:
-                                    logging.warning("Split part send failed (%s): %s", part_path, excc)
-                                finally:
-                                    try:
-                                        os.remove(part_path)
-                                    except Exception:
-                                        pass
+                    parts = split_video_bytes_to_parts(v_raw, TELEGRAM_MAX_UPLOAD_MB)
+                    if parts:
+                        sent_any_part = False
+                        for part_i, part_path in enumerate(parts, start=1):
                             try:
-                                part_dir = os.path.dirname(parts[0])
-                                if os.path.isdir(part_dir):
-                                    shutil.rmtree(part_dir, ignore_errors=True)
-                            except Exception:
-                                pass
-                            if sent_any_part:
-                                sent_videos += 1
-                                sent_video_urls.add(resolved_video)
-                                logging.info("Sent split parts for large video: %s", resolved_video)
-                            else:
-                                failed_videos += 1
-                                bot.send_message(chat_id, f"Video URL (too large to upload): {resolved_video}")
+                                with open(part_path, "rb") as pf:
+                                    bot.send_document(
+                                        chat_id,
+                                        pf,
+                                        caption=f"Video part {part_i}/{len(parts)}",
+                                    )
+                                sent_any_part = True
+                            except Exception as excc:
+                                logging.warning("Split part send failed (%s): %s", part_path, excc)
+                            finally:
+                                try:
+                                    os.remove(part_path)
+                                except Exception:
+                                    pass
+                        try:
+                            part_dir = os.path.dirname(parts[0])
+                            if os.path.isdir(part_dir):
+                                shutil.rmtree(part_dir, ignore_errors=True)
+                        except Exception:
+                            pass
+                        if sent_any_part:
+                            sent_videos += 1
+                            sent_video_urls.add(resolved_video)
+                            logging.info("Sent split parts for large video: %s", resolved_video)
                         else:
                             failed_videos += 1
                             bot.send_message(chat_id, f"Video URL (too large to upload): {resolved_video}")
+                    else:
+                        failed_videos += 1
+                        bot.send_message(chat_id, f"Video URL (too large to upload): {resolved_video}")
                     continue
 
                 v_file = io.BytesIO(v_raw)
@@ -1206,4 +1155,3 @@ if __name__ == "__main__":
         ENABLE_FFMPEG_SPLIT_FALLBACK,
     )
     bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
-
